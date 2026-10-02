@@ -151,3 +151,382 @@ button:hover {
 
   background: #6366f1;
 }
+
+.timer {
+  font-size: 42px;
+  font-weight: 700;
+  margin: 15px 0;
+}
+
+.timer span {
+  font-size: 16px;
+  font-weight: 400;
+  margin-left: 6px;
+  color: #6b7280;
+}
+
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  font-size: 13px;
+
+  color: #6b7280;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+
+  border-radius: 50%;
+
+  background: #9ca3af;
+}
+
+.status-dot.active {
+  background: #22c55e;
+}
+
+.end-button {
+  margin-top: 15px;
+
+  background: #ef4444;
+}
+
+.status-dot.idle {
+  background: #f59e0b;
+}
+
+.session-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  margin: 15px 0;
+  padding: 12px;
+
+  border-radius: 10px;
+}
+
+.session-state strong {
+  display: block;
+}
+
+.session-state small {
+  display: block;
+  margin-top: 3px;
+  color: #6b7280;
+}
+
+.state-dot {
+  width: 10px;
+  height: 10px;
+
+  border-radius: 50%;
+
+  flex-shrink: 0;
+}
+
+.session-state.active {
+  background: #ecfdf5;
+}
+
+.session-state.active .state-dot {
+  background: #22c55e;
+}
+
+.session-state.idle {
+  background: #fffbeb;
+}
+
+.session-state.idle .state-dot {
+  background: #f59e0b;
+}
+
+.session-state.paused {
+  background: #f3f4f6;
+}
+
+.session-state.paused .state-dot {
+  background: #6b7280;
+}
+
+.session-state.ended {
+  background: #f3f4f6;
+}
+
+.session-state.ended .state-dot {
+  background: #9ca3af;
+}
+
+.session-state.neutral {
+  background: #f3f4f6;
+}
+
+.session-state.neutral .state-dot {
+  background: #9ca3af;
+}
+
+.nudge {
+  padding: 12px;
+
+  border-radius: 10px;
+
+  background: #f5f7ff;
+}
+
+.nudge-label {
+  font-size: 12px;
+  font-weight: 700;
+
+  margin-bottom: 8px;
+}
+
+.nudge p {
+  margin: 0;
+
+  line-height: 1.5;
+}
+
+/* ================================================
+   SESSION STATE
+   ================================================ */
+
+.session-state {
+
+  display: flex;
+
+  align-items: center;
+
+  gap: 10px;
+
+  margin: 15px 0;
+
+  padding: 12px;
+
+  border-radius: 10px;
+
+}
+
+
+.session-state strong {
+
+  display: block;
+
+}
+
+
+.session-state small {
+
+  display: block;
+
+  margin-top: 3px;
+
+  color: #6b7280;
+
+}
+
+
+.state-dot {
+
+  width: 10px;
+
+  height: 10px;
+
+  border-radius: 50%;
+
+  flex-shrink: 0;
+
+}
+
+
+.session-state.active {
+
+  background: #ecfdf5;
+
+}
+
+
+.session-state.active
+.state-dot {
+
+  background: #22c55e;
+
+}
+
+
+.session-state.idle {
+
+  background: #fffbeb;
+
+}
+
+
+.session-state.idle
+.state-dot {
+
+  background: #f59e0b;
+
+}
+
+
+.session-state.paused {
+
+  background: #f3f4f6;
+
+}
+
+
+.session-state.paused
+.state-dot {
+
+  background: #6b7280;
+
+}
+
+
+.session-state.ended {
+
+  background: #f3f4f6;
+
+}
+
+
+.session-state.ended
+.state-dot {
+
+  background: #9ca3af;
+
+}
+
+
+.session-state.neutral {
+
+  background: #f3f4f6;
+
+}
+
+
+.session-state.neutral
+.state-dot {
+
+  background: #9ca3af;
+
+}
+
+
+/* ================================================
+   MENTOR NUDGE
+   ================================================ */
+
+.nudge {
+
+  padding: 14px;
+
+  border-radius: 12px;
+
+  background: #f5f7ff;
+
+}
+
+
+.nudge-label {
+
+  font-size: 12px;
+
+  font-weight: 700;
+
+  margin-bottom: 8px;
+
+}
+
+
+.nudge p {
+
+  margin: 0;
+
+  line-height: 1.5;
+
+}
+
+
+/* ================================================
+   DISMISS BUTTON
+   ================================================ */
+
+.dismiss-button {
+
+  margin-top: 12px;
+
+  padding: 7px 12px;
+
+  border-radius: 7px;
+
+  border: none;
+
+  cursor: pointer;
+
+}
+
+
+.mentor-input {
+
+  display: grid;
+
+  gap: 8px;
+
+  margin-top: 16px;
+
+}
+
+
+.mentor-input label {
+
+  font-size: 13px;
+
+  font-weight: 700;
+
+}
+
+
+.mentor-input textarea {
+
+  min-height: 72px;
+
+  resize: vertical;
+
+  padding: 10px;
+
+  border: 1px solid #d1d5db;
+
+  border-radius: 8px;
+
+  font: inherit;
+
+}
+
+
+.mentor-input button:disabled {
+
+  cursor: wait;
+
+  opacity: 0.65;
+
+}
+
+
+.mentor-response {
+
+  margin-top: 16px;
+
+}
+
+
+/* Guidance is proactive; the manual question controls stay disabled. */
+.mentor-input,
+.mentor-response {
+
+  display: none;
+
+}

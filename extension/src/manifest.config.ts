@@ -5,41 +5,49 @@ export default defineManifest({
 
   name: "AI Study Mentor",
 
-  version: "0.1.0",
+  version: "1.0.0",
 
   description:
-    "An AI-powered study mentor that provides contextual learning nudges.",
+    "An AI-powered study mentor that tracks learning activity and provides useful nudges.",
 
   permissions: [
     "storage",
     "tabs",
     "activeTab",
-    "sidePanel"
+    "sidePanel",
+    "idle"
   ],
 
   host_permissions: [
     "https://leetcode.com/*",
-    "https://www.youtube.com/*"
+    "https://*.leetcode.com/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://openrouter.ai/*"
   ],
 
   background: {
-    service_worker: "src/background/serviceWorker.ts",
+    service_worker:
+      "src/background/serviceWorker.ts",
     type: "module"
   },
 
   action: {
-    default_title: "Open AI Study Mentor"
+    default_title: "Open Study Mentor"
   },
 
   side_panel: {
-    default_path: "src/sidepanel/index.html"
+    default_path:
+      "src/sidepanel/index.html"
   },
 
   content_scripts: [
     {
       matches: [
         "https://leetcode.com/*",
-        "https://www.youtube.com/*"
+        "https://*.leetcode.com/*",
+        "https://www.youtube.com/*",
+        "https://youtube.com/*"
       ],
 
       js: [
@@ -48,5 +56,7 @@ export default defineManifest({
 
       run_at: "document_idle"
     }
-  ]
+  ],
+
+  icons: {}
 });
