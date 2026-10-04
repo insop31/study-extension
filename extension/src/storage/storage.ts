@@ -1,3 +1,8 @@
+import { api } from "../api/client";
+
+import type { UserState } from "../core/types";
+
+
 // --------------------------------------------------
 // TYPES
 // --------------------------------------------------
@@ -20,10 +25,7 @@ export interface StudySession {
 
   isActive: boolean;
 
-  userState:
-    | "active"
-    | "idle"
-    | "paused";
+  userState: UserState;
 
 }
 
@@ -52,134 +54,42 @@ export interface StudyActivity {
 
 
 // --------------------------------------------------
-// STORAGE KEYS
-// --------------------------------------------------
-
-const SESSION_KEY =
-  "currentStudySession";
-
-const ACTIVITY_KEY =
-  "studyActivities";
-
-
-// --------------------------------------------------
-// SAVE SESSION
-// --------------------------------------------------
-
-export async function saveCurrentSession(
-  session: StudySession
-): Promise<void> {
-
-  await chrome.storage.local.set({
-
-    [SESSION_KEY]:
-      session
-
-  });
-
-}
-
-
-// --------------------------------------------------
-// GET SESSION
+// READS (data lives in PostgreSQL behind the REST API)
 // --------------------------------------------------
 
 export async function getCurrentSession():
   Promise<StudySession | null> {
 
-  const result =
-    await chrome.storage.local.get(
-      SESSION_KEY
+  const { session } =
+    await api<{ session: StudySession | null }>(
+      "GET",
+      "/sessions/current"
     );
-
-
-  const session =
-    result[SESSION_KEY] as
-      | StudySession
-      | undefined;
-
-
-  if (!session) {
-
-    return null;
-
-  }
-
 
   return session;
 
 }
 
 
-// --------------------------------------------------
-// CLEAR SESSION
-// --------------------------------------------------
+export async function getActivities(
+  problemSlug?: string,
+  limit = 50
+): Promise<StudyActivity[]> {
 
-export async function clearCurrentSession():
-  Promise<void> {
+  const query =
+    new URLSearchParams({
+      limit: String(limit),
+      ...(problemSlug
+        ? { problemSlug }
+        : {})
+    });
 
-  await chrome.storage.local.remove(
-    SESSION_KEY
-  );
-
-}
-
-
-// --------------------------------------------------
-// SAVE ACTIVITY
-// --------------------------------------------------
-
-export async function saveActivity(
-  activity: StudyActivity
-): Promise<void> {
-
-  const result =
-    await chrome.storage.local.get(
-      ACTIVITY_KEY
+  const { activities } =
+    await api<{ activities: StudyActivity[] }>(
+      "GET",
+      `/activities?${query}`
     );
 
-
-  const activities =
-    (result[ACTIVITY_KEY] as StudyActivity[] | undefined)
-    ?? [];
-
-
-  activities.push(activity);
-
-
-  // Keep only the latest 500 activities.
-
-  const trimmed =
-    activities.slice(-500);
-
-
-  await chrome.storage.local.set({
-
-    [ACTIVITY_KEY]:
-      trimmed
-
-  });
-
-}
-
-
-// --------------------------------------------------
-// GET ACTIVITIES
-// --------------------------------------------------
-
-export async function getActivities():
-  Promise<StudyActivity[]> {
-
-  const result =
-    await chrome.storage.local.get(
-      ACTIVITY_KEY
-    );
-
-
-  return (
-    result[ACTIVITY_KEY] as
-      | StudyActivity[]
-      | undefined
-  ) ?? [];
+  return activities;
 
 }

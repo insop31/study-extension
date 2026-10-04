@@ -1,27 +1,16 @@
+import type {
+  PageContext,
+  Platform
+} from "../core/types";
+
+import {
+  detectPlatformFromHostname
+} from "../core/contextEngine";
+
+
 // --------------------------------------------------
 // TYPES
 // --------------------------------------------------
-
-interface PageContext {
-
-  title: string;
-
-  url: string;
-
-  website: string;
-
-  timestamp: number;
-
-  problemSlug?: string;
-
-  difficulty?: string;
-
-  topics?: string[];
-
-  programmingLanguage?: string;
-
-}
-
 
 type ActivityType =
   | "mousemove"
@@ -49,34 +38,11 @@ type SubmissionResult =
 // WEBSITE DETECTION
 // --------------------------------------------------
 
-function getWebsite(): string {
+function getWebsite(): Platform {
 
-  const hostname =
-    window.location.hostname;
-
-
-  if (
-    hostname === "leetcode.com" ||
-    hostname.endsWith(".leetcode.com")
-  ) {
-
-    return "leetcode";
-
-  }
-
-
-  if (
-    hostname === "youtube.com" ||
-    hostname === "www.youtube.com" ||
-    hostname.endsWith(".youtube.com")
-  ) {
-
-    return "youtube";
-
-  }
-
-
-  return "unknown";
+  return detectPlatformFromHostname(
+    window.location.hostname
+  );
 
 }
 

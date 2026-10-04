@@ -1,404 +1,203 @@
-import {
-  getCurrentSession,
-  saveCurrentSession,
-  saveActivity,
-  type StudySession
+import { api } from "../api/client";
+
+import type {
+  StudySession
 } from "../storage/storage";
 
 import type {
-  StudyActivity
-} from "../storage/storage";
+  Nudge,
+  UserState
+} from "./types";
 
 
-// --------------------------------------------------
-// CONSTANTS
-// --------------------------------------------------
+// Session state and active-time accounting live on the backend,
+// so every client sees the same numbers. These are thin wrappers
+// over the REST API.
 
-export const IDLE_THRESHOLD =
-  60 * 1000;
+interface SessionResponse {
+
+  session: StudySession | null;
+
+}
 
 
-// --------------------------------------------------
-// START SESSION
-// --------------------------------------------------
+export interface ActivityDetails {
+
+  problemSlug?: string;
+
+  difficulty?: string;
+
+  topics?: string[];
+
+  programmingLanguage?: string;
+
+  submissionResult?: string;
+
+}
+
+
+// What the nudge engine needs to decide whether to speak.
+export interface NudgeState {
+
+  lastNudgeAt: number | null;
+
+  lastProactiveAt: number | null;
+
+  lastProactiveType: string | null;
+
+  failedAttempts: number;
+
+}
+
+
+export interface ActivityResult {
+
+  session: StudySession;
+
+  nudgeState: NudgeState | null;
+
+}
+
 
 export async function startSession(
   website: string,
   title: string,
   url: string
-): Promise<StudySession> {
+): Promise<StudySession | null> {
 
-  const now =
-    Date.now();
-
-
-  const session: StudySession = {
-
-    id:
-      crypto.randomUUID(),
-
-    startTime:
-      now,
-
-    lastActivityTime:
-      now,
-
-    totalActiveTime:
-      0,
-
-    website,
-
-    currentPage:
-      title,
-
-    currentUrl:
-      url,
-
-    isActive:
-      true,
-
-    userState:
-      "active"
-
-  };
-
-
-  await saveCurrentSession(
-    session
-  );
-
-
-  console.log(
-    "🟢 Study session started"
-  );
-
+  const { session } =
+    await api<SessionResponse>(
+      "POST",
+      "/sessions",
+      { website, title, url }
+    );
 
   return session;
 
 }
 
-
-// --------------------------------------------------
-// UPDATE PAGE
-// --------------------------------------------------
 
 export async function updateSession(
   website: string,
   title: string,
   url: string
-): Promise<StudySession> {
+): Promise<StudySession | null> {
 
-  const session =
-    await getCurrentSession();
-
-
-  if (!session) {
-
-    return startSession(
-      website,
-      title,
-      url
+  const { session } =
+    await api<SessionResponse>(
+      "PATCH",
+      "/sessions/current/page",
+      { website, title, url }
     );
-
-  }
-
-
-  if (!session.isActive) {
-
-    return session;
-
-  }
-
-
-  session.website =
-    website;
-
-  session.currentPage =
-    title;
-
-  session.currentUrl =
-    url;
-
-
-  await saveCurrentSession(
-    session
-  );
-
 
   return session;
 
 }
 
-
-// --------------------------------------------------
-// RECORD USER ACTIVITY
-// --------------------------------------------------
 
 export async function recordActivity(
   website: string,
   title: string,
   url: string,
   activityType = "activity",
-  details: Pick<
-    StudyActivity,
-    | "problemSlug"
-    | "difficulty"
-    | "topics"
-    | "programmingLanguage"
-    | "submissionResult"
-  > = {}
-): Promise<StudySession | null> {
+  details: ActivityDetails = {}
+): Promise<ActivityResult | null> {
 
-  const session =
-    await getCurrentSession();
+  const result =
+    await api<{
+      session: StudySession | null;
+      nudgeState: NudgeState | null;
+    }>(
+      "POST",
+      "/sessions/current/activity",
+      {
+        website,
+        title,
+        url,
+        activityType,
+        ...details
+      }
+    );
 
-
-  if (!session) {
-
-    return null;
-
-  }
-
-
-  if (!session.isActive) {
-
-    return session;
-
-  }
-
-
-  const now =
-    Date.now();
-
-
-  const elapsed =
-    now -
-    session.lastActivityTime;
-
-
-  // Only count the period since the
-  // previous activity if it wasn't
-  // longer than our idle threshold and
-  // the session was already active. This
-  // prevents time spent on another tab
-  // from being added when study resumes.
-
-  if (
-    session.userState === "active" &&
-    elapsed > 0 &&
-    elapsed <= IDLE_THRESHOLD
-  ) {
-
-    session.totalActiveTime +=
-      elapsed;
-
-  }
-
-
-  session.lastActivityTime =
-    now;
-
-
-  session.website =
-    website;
-
-  session.currentPage =
-    title;
-
-  session.currentUrl =
-    url;
-
-  session.userState =
-    "active";
-
-
-  await saveCurrentSession(
-    session
-  );
-
-
-  await saveActivity({
-
-    timestamp:
-      now,
-
-    type:
-      activityType,
-
-    website,
-
-    pageTitle:
-      title,
-
-    ...details
-
-  });
-
-
-  return session;
+  return result.session
+    ? result as ActivityResult
+    : null;
 
 }
 
-
-// --------------------------------------------------
-// SET USER STATE
-// --------------------------------------------------
 
 export async function setUserState(
-  state:
-    | "active"
-    | "idle"
-    | "paused"
+  state: UserState
 ): Promise<StudySession | null> {
 
-  const session =
-    await getCurrentSession();
-
-
-  if (!session) {
-
-    return null;
-
-  }
-
-
-  if (!session.isActive) {
-
-    return session;
-
-  }
-
-
-  // Repeating a state update must not move the
-  // activity boundary. The side panel periodically
-  // refreshes the active-tab context.
-  if (
-    session.userState === state
-  ) {
-
-    return session;
-
-  }
-
-
-  const now =
-    Date.now();
-
-
-  // Preserve the final active slice when transitioning
-  // into idle/paused, then establish a new boundary so
-  // paused time is never counted on resume.
-  if (
-    session.userState === "active" &&
-    state !== "active"
-  ) {
-
-    const elapsed =
-      now - session.lastActivityTime;
-
-
-    if (
-      elapsed > 0 &&
-      elapsed <= IDLE_THRESHOLD
-    ) {
-
-      session.totalActiveTime +=
-        elapsed;
-
-    }
-
-  }
-
-
-  session.lastActivityTime =
-    now;
-
-
-  session.userState =
-    state;
-
-
-  await saveCurrentSession(
-    session
-  );
-
+  const { session } =
+    await api<SessionResponse>(
+      "PUT",
+      "/sessions/current/state",
+      { state }
+    );
 
   return session;
 
 }
 
-
-// --------------------------------------------------
-// END SESSION
-// --------------------------------------------------
 
 export async function endSession():
   Promise<StudySession | null> {
 
-  const session =
-    await getCurrentSession();
-
-
-  if (!session) {
-
-    return null;
-
-  }
-
-
-  if (!session.isActive) {
-
-    return session;
-
-  }
-
-
-  const now =
-    Date.now();
-
-
-  const elapsed =
-    now -
-    session.lastActivityTime;
-
-
-  // Count the final active period
-  // only if it wasn't an idle period.
-
-  if (
-    session.userState === "active" &&
-    elapsed > 0 &&
-    elapsed <= IDLE_THRESHOLD
-  ) {
-
-    session.totalActiveTime +=
-      elapsed;
-
-  }
-
-
-  session.isActive =
-    false;
-
-
-  session.userState =
-    "paused";
-
-
-  session.lastActivityTime =
-    now;
-
-
-  await saveCurrentSession(
-    session
-  );
-
-
-  console.log(
-    "⚪ Study session ended"
-  );
-
+  const { session } =
+    await api<SessionResponse>(
+      "POST",
+      "/sessions/current/end"
+    );
 
   return session;
+
+}
+
+
+// --------------------------------------------------
+// NUDGES
+// --------------------------------------------------
+
+export async function getCurrentNudge():
+  Promise<Nudge | null> {
+
+  const { nudge } =
+    await api<{ nudge: Nudge | null }>(
+      "GET",
+      "/nudges/current"
+    );
+
+  return nudge;
+
+}
+
+
+export async function saveNudge(
+  nudge: Pick<Nudge, "type" | "message" | "priority">,
+  problemSlug?: string
+): Promise<Nudge> {
+
+  const { nudge: saved } =
+    await api<{ nudge: Nudge }>(
+      "POST",
+      "/nudges",
+      { ...nudge, problemSlug }
+    );
+
+  return saved;
+
+}
+
+
+export async function dismissNudge(
+  id: string
+): Promise<void> {
+
+  await api(
+    "POST",
+    `/nudges/${id}/dismiss`
+  );
 
 }

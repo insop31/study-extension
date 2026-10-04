@@ -1,49 +1,67 @@
+// Shared types used by the content script, service worker and side panel.
+
 export type Platform =
   | "leetcode"
   | "youtube"
-  | "generic"
   | "unknown";
 
-export type ActivityType =
-  | "problem_solving"
-  | "video_learning"
-  | "reading"
-  | "unknown";
+export type UserState =
+  | "active"
+  | "idle"
+  | "paused";
 
-export interface StudyContext {
-
-  platform: Platform;
-
-  activityType: ActivityType;
+export interface PageContext {
 
   title: string;
 
   url: string;
 
-  timeSpent: number;
+  website: Platform;
 
-  topic?: string;
+  timestamp: number;
+
+  problemSlug?: string;
 
   difficulty?: string;
 
-  attempts?: number;
+  topics?: string[];
 
-  timestamp: number;
+  programmingLanguage?: string;
+
 }
+
+export type NudgeType =
+  | "STUCK"
+  | "THINKING_PROMPT"
+  | "ACTIVE_RECALL"
+  | "BREAK_REMINDER"
+  | "AI_MENTOR"
+  | "AI_MENTOR_ERROR";
 
 export interface Nudge {
 
-  type:
-    | "STUCK"
-    | "ACTIVE_RECALL"
-    | "PRACTICE"
-    | "REVISION"
-    | "BREAK"
-    | "ENCOURAGEMENT";
+  id: string;
+
+  type: NudgeType;
 
   message: string;
 
   priority: "low" | "medium" | "high";
 
-  reason: string;
+  createdAt: number;
+
+}
+
+export interface AuthUser {
+
+  id: string;
+
+  name: string | null;
+
+  email: string;
+
+  hasGoogle: boolean;
+
+  createdAt: number;
+
 }

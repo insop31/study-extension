@@ -1,36 +1,44 @@
-import type {
-  Platform,
-  ActivityType
-} from "./types";
+import type { Platform } from "./types";
 
-export function detectPlatform(
-  url: string
+function hostMatches(
+  hostname: string,
+  domain: string
+): boolean {
+
+  return (
+    hostname === domain ||
+    hostname.endsWith(`.${domain}`)
+  );
+}
+
+export function detectPlatformFromHostname(
+  hostname: string
 ): Platform {
 
-  if (url.includes("leetcode.com")) {
+  if (hostMatches(hostname, "leetcode.com")) {
     return "leetcode";
   }
 
-  if (url.includes("youtube.com")) {
+  if (hostMatches(hostname, "youtube.com")) {
     return "youtube";
   }
 
   return "unknown";
 }
 
-export function detectActivity(
-  platform: Platform
-): ActivityType {
+export function detectPlatform(
+  url?: string
+): Platform {
 
-  switch (platform) {
+  if (!url) {
+    return "unknown";
+  }
 
-    case "leetcode":
-      return "problem_solving";
-
-    case "youtube":
-      return "video_learning";
-
-    default:
-      return "unknown";
+  try {
+    return detectPlatformFromHostname(
+      new URL(url).hostname
+    );
+  } catch {
+    return "unknown";
   }
 }

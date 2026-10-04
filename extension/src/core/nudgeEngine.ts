@@ -1,6 +1,8 @@
-// --------------------------------------------------
-// TYPES
-// --------------------------------------------------
+import type {
+  Nudge,
+  UserState
+} from "./types";
+
 
 export interface NudgeContext {
 
@@ -10,31 +12,10 @@ export interface NudgeContext {
 
   activeTime: number;
 
-  userState:
-    | "active"
-    | "idle"
-    | "paused";
+  userState: UserState;
 
-}
-
-
-export interface Nudge {
-
-  id: string;
-
-  type:
-    | "THINKING_PROMPT"
-    | "ACTIVE_RECALL"
-    | "BREAK_REMINDER";
-
-  message: string;
-
-  priority:
-    | "low"
-    | "medium"
-    | "high";
-
-  createdAt: number;
+  // Unsuccessful submissions on the current problem.
+  failedAttempts: number;
 
 }
 
@@ -45,6 +26,12 @@ export interface Nudge {
 
 export const NUDGE_COOLDOWN =
   15 * 60 * 1000;
+
+const STUCK_MINUTES =
+  10;
+
+const STUCK_ATTEMPTS =
+  3;
 
 
 // --------------------------------------------------
@@ -81,6 +68,34 @@ export function evaluateNudge(
     context.website ===
     "leetcode"
   ) {
+
+    // Active + enough time + repeated failures
+    // (cooldown is checked by the caller).
+    if (
+      activeMinutes >= STUCK_MINUTES &&
+      context.failedAttempts >= STUCK_ATTEMPTS
+    ) {
+
+      return {
+
+        id:
+          `stuck-${Date.now()}`,
+
+        type:
+          "STUCK",
+
+        priority:
+          "high",
+
+        message:
+          `You've had ${context.failedAttempts} unsuccessful submissions on ${context.pageTitle}. Instead of tweaking the same approach, write down what each failing case has in common, then think about what information you need to look up quickly.`,
+
+        createdAt:
+          Date.now()
+
+      };
+
+    }
 
     if (
       activeMinutes >= 10

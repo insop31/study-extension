@@ -3,75 +3,24 @@ import {
   useState
 } from "react";
 
+import type {
+  PageContext as StudyContext,
+  Nudge,
+  AuthUser
+} from "../core/types";
+
+import AuthScreen from "./AuthScreen";
+
+import { googleEnabled } from "../api/auth";
+
+import type {
+  StudySession
+} from "../storage/storage";
+
 
 // --------------------------------------------------
 // TYPES
 // --------------------------------------------------
-
-interface StudyContext {
-
-  title: string;
-
-  url: string;
-
-  website: string;
-
-  timestamp: number;
-
-  problemSlug?: string;
-
-  difficulty?: string;
-
-  topics?: string[];
-
-  programmingLanguage?: string;
-
-}
-
-
-interface StudySession {
-
-  id: string;
-
-  startTime: number;
-
-  lastActivityTime: number;
-
-  totalActiveTime: number;
-
-  website: string;
-
-  currentPage: string;
-
-  currentUrl: string;
-
-  isActive: boolean;
-
-  userState:
-    | "active"
-    | "idle"
-    | "paused";
-
-}
-
-
-interface Nudge {
-
-  id: string;
-
-  type: string;
-
-  message: string;
-
-  priority:
-    | "low"
-    | "medium"
-    | "high";
-
-  createdAt: number;
-
-}
-
 
 interface MentorResponse {
 
@@ -88,7 +37,19 @@ interface MentorResponse {
 // APP
 // --------------------------------------------------
 
-function App() {
+interface DashboardProps {
+
+  user: AuthUser;
+
+  onSignOut: () => void;
+
+}
+
+
+function Dashboard({
+  user,
+  onSignOut
+}: DashboardProps) {
 
   const [
     context,
@@ -567,6 +528,21 @@ function formatTime(
           Your personal AI learning companion
         </p>
 
+        <div className="user-bar">
+
+          <span title={user.email}>
+            {user.name || user.email}
+          </span>
+
+          <button
+            className="link-button"
+            onClick={onSignOut}
+          >
+            Sign out
+          </button>
+
+        </div>
+
       </header>
 
 
@@ -776,9 +752,10 @@ function formatTime(
                   null
                 );
 
-                chrome.storage.local.remove(
-                  "currentNudge"
-                );
+                chrome.runtime.sendMessage({
+                  type: "DISMISS_NUDGE",
+                  nudgeId: nudge.id
+                });
 
               }}
             >
@@ -867,6 +844,82 @@ function formatTime(
 
     </div>
 
+  );
+
+}
+
+
+function App() {
+
+  const [user, setUser] =
+    useState<AuthUser | null>(null);
+
+  const [checking, setChecking] =
+    useState(true);
+
+
+  useEffect(() => {
+
+    chrome.runtime.sendMessage(
+      { type: "GET_AUTH_STATE" },
+      (response: { user?: AuthUser | null } | undefined) => {
+
+        setUser(
+          chrome.runtime.lastError
+            ? null
+            : response?.user ?? null
+        );
+
+        setChecking(false);
+
+      }
+    );
+
+  }, []);
+
+
+  function handleSignOut(): void {
+
+    chrome.runtime.sendMessage(
+      { type: "AUTH_LOGOUT" },
+      () => {
+
+        setUser(null);
+
+      }
+    );
+
+  }
+
+
+  if (checking) {
+
+    return (
+      <div className="app">
+        <p className="muted">Loading...</p>
+      </div>
+    );
+
+  }
+
+
+  if (!user) {
+
+    return (
+      <AuthScreen
+        googleEnabled={googleEnabled}
+        onSignedIn={setUser}
+      />
+    );
+
+  }
+
+
+  return (
+    <Dashboard
+      user={user}
+      onSignOut={handleSignOut}
+    />
   );
 
 }

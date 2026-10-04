@@ -2,17 +2,44 @@ import {
   getCurrentSession
 } from "../storage/storage";
 
+import type {
+  PageContext
+} from "../core/types";
+
 import {
-  getActivities
-} from "../storage/storage";
+  detectPlatform
+} from "../core/contextEngine";
 
 import {
   startSession,
   updateSession,
   recordActivity,
   setUserState,
-  endSession
+  endSession,
+  getCurrentNudge,
+  saveNudge,
+  dismissNudge,
+  type NudgeState
 } from "../core/sessionManager";
+
+import type {
+  StudySession
+} from "../storage/storage";
+
+import {
+  api,
+  BACKEND_URL,
+  getToken,
+  NotSignedInError
+} from "../api/client";
+
+import {
+  getAuthState,
+  login,
+  loginWithGoogle,
+  logout,
+  signup
+} from "../api/auth";
 
 import {
   evaluateNudge,
@@ -23,27 +50,6 @@ import {
 // --------------------------------------------------
 // TYPES
 // --------------------------------------------------
-
-interface PageContext {
-
-  title: string;
-
-  url: string;
-
-  website: string;
-
-  timestamp: number;
-
-  problemSlug?: string;
-
-  difficulty?: string;
-
-  topics?: string[];
-
-  programmingLanguage?: string;
-
-}
-
 
 interface Message {
 
@@ -62,6 +68,14 @@ interface Message {
   question?: string;
 
   code?: string;
+
+  nudgeId?: string;
+
+  name?: string;
+
+  email?: string;
+
+  password?: string;
 
 }
 
@@ -96,6 +110,22 @@ const codeByTab =
   new Map<number, CodeSnapshot>();
 
 
+// Background events keep firing after sign-out. Their API calls are
+// rejected locally with NotSignedInError, which is expected, not a bug.
+self.addEventListener(
+  "unhandledrejection",
+  event => {
+
+    if (event.reason instanceof NotSignedInError) {
+
+      event.preventDefault();
+
+    }
+
+  }
+);
+
+
 // --------------------------------------------------
 // CHROME IDLE API
 // --------------------------------------------------
@@ -107,59 +137,6 @@ const codeByTab =
 chrome.idle.setDetectionInterval(
   15
 );
-
-
-// --------------------------------------------------
-// WEBSITE FROM URL
-// --------------------------------------------------
-
-function getWebsiteFromUrl(
-  url?: string
-): string {
-
-  if (!url) {
-
-    return "unknown";
-
-  }
-
-
-  try {
-
-    const hostname =
-      new URL(url).hostname;
-
-
-    if (
-      hostname === "leetcode.com" ||
-      hostname.endsWith(".leetcode.com")
-    ) {
-
-      return "leetcode";
-
-    }
-
-
-    if (
-      hostname === "youtube.com" ||
-      hostname === "www.youtube.com" ||
-      hostname.endsWith(".youtube.com")
-    ) {
-
-      return "youtube";
-
-    }
-
-  } catch {
-
-    return "unknown";
-
-  }
-
-
-  return "unknown";
-
-}
 
 
 async function getLeetCodeDifficulty(
@@ -270,7 +247,7 @@ async function updateContextFromActiveTab():
 
 
   const website =
-    getWebsiteFromUrl(
+    detectPlatform(
       tab.url
     );
 
@@ -385,18 +362,6 @@ chrome.runtime.onInstalled.addListener(
       "🧠 AI Study Mentor installed."
     );
 
-
-    await chrome.storage.local.set({
-
-      studySettings: {
-
-        trackingEnabled:
-          true
-
-      }
-
-    });
-
   }
 );
 
@@ -510,7 +475,7 @@ chrome.tabs.onUpdated.addListener(
 
 
     const website =
-      getWebsiteFromUrl(
+      detectPlatform(
         tab.url
       );
 
@@ -1164,15 +1129,151 @@ chrome.runtime.onMessage.addListener(
       "GET_CURRENT_NUDGE"
     ) {
 
-      chrome.storage.local.get(
-        "currentNudge"
-      )
-        .then(result => {
+      getCurrentNudge()
+        .then(nudge => {
 
           sendResponse(
-            result.currentNudge ??
-              null
+            nudge
           );
+
+        })
+        .catch(error => {
+
+          console.error(
+            "Nudge lookup error:",
+            error
+          );
+
+          sendResponse(
+            null
+          );
+
+        });
+
+
+      return true;
+
+    }
+
+
+    // ==============================================
+    // AUTH
+    // ==============================================
+
+    if (
+      message.type === "GET_AUTH_STATE"
+    ) {
+
+      getAuthState()
+        .then(user => {
+
+          sendResponse({ success: true, user });
+
+        })
+        .catch(() => {
+
+          sendResponse({ success: true, user: null });
+
+        });
+
+
+      return true;
+
+    }
+
+
+    if (
+      message.type === "AUTH_SIGNUP" ||
+      message.type === "AUTH_LOGIN" ||
+      message.type === "AUTH_GOOGLE"
+    ) {
+
+      const attempt =
+        message.type === "AUTH_SIGNUP"
+          ? signup(
+              message.name ?? "",
+              message.email ?? "",
+              message.password ?? ""
+            )
+          : message.type === "AUTH_LOGIN"
+            ? login(
+                message.email ?? "",
+                message.password ?? ""
+              )
+            : loginWithGoogle();
+
+
+      attempt
+        .then(user => {
+
+          sendResponse({ success: true, user });
+
+        })
+        .catch(error => {
+
+          sendResponse({
+            success: false,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Sign-in failed."
+          });
+
+        });
+
+
+      return true;
+
+    }
+
+
+    if (
+      message.type === "AUTH_LOGOUT"
+    ) {
+
+      logout()
+        .then(() => {
+
+          currentContext = null;
+
+          codeByTab.clear();
+
+          sendResponse({ success: true });
+
+        });
+
+
+      return true;
+
+    }
+
+
+    // ==============================================
+    // DISMISS NUDGE
+    // ==============================================
+
+    if (
+      message.type ===
+      "DISMISS_NUDGE" &&
+      message.nudgeId
+    ) {
+
+      dismissNudge(
+        message.nudgeId
+      )
+        .then(() => {
+
+          sendResponse({ success: true });
+
+        })
+        .catch(error => {
+
+          console.error(
+            "Dismiss nudge error:",
+            error
+          );
+
+          sendResponse({ success: false });
 
         });
 
@@ -1234,6 +1335,13 @@ chrome.runtime.onMessage.addListener(
 async function handlePageContext(
   context: PageContext
 ): Promise<void> {
+
+  if (!await getToken()) {
+
+    return;
+
+  }
+
 
   if (
     context.website ===
@@ -1311,6 +1419,13 @@ async function handleUserActivity(
   submissionResult?: string
 ): Promise<void> {
 
+  if (!await getToken()) {
+
+    return;
+
+  }
+
+
   const session =
     await getCurrentSession();
 
@@ -1358,7 +1473,7 @@ async function handleUserActivity(
   }
 
 
-  const updatedSession =
+  const result =
     await recordActivity(
 
       context.website,
@@ -1388,7 +1503,7 @@ async function handleUserActivity(
     );
 
 
-  if (!updatedSession) {
+  if (!result) {
 
     return;
 
@@ -1403,10 +1518,23 @@ async function handleUserActivity(
   );
 
 
-  await evaluateCurrentNudge();
+  if (!result.nudgeState) {
+
+    return;
+
+  }
+
+
+  await evaluateCurrentNudge(
+    result.session,
+    result.nudgeState,
+    context.problemSlug
+  );
 
 
   await maybeGenerateProactiveGuidance(
+    result.session,
+    result.nudgeState,
     submissionResult
   );
 
@@ -1467,11 +1595,6 @@ async function handleStartSession() {
     );
 
 
-  await chrome.storage.local.remove(
-    "currentNudge"
-  );
-
-
   return {
 
     success:
@@ -1494,11 +1617,6 @@ async function handleEndSession() {
     await endSession();
 
 
-  await chrome.storage.local.remove(
-    "currentNudge"
-  );
-
-
   return {
 
     success:
@@ -1515,52 +1633,25 @@ async function handleEndSession() {
 // NUDGE ENGINE
 // --------------------------------------------------
 
-async function evaluateCurrentNudge():
-  Promise<void> {
-
-  const session =
-    await getCurrentSession();
-
+async function evaluateCurrentNudge(
+  session: StudySession,
+  state: NudgeState,
+  problemSlug?: string
+): Promise<void> {
 
   if (
-    !session ||
-    !session.isActive
+    !session.isActive ||
+    session.userState !== "active"
   ) {
 
     return;
 
   }
-
-
-  if (
-    session.userState !==
-    "active"
-  ) {
-
-    return;
-
-  }
-
-
-  const storage =
-    await chrome.storage.local.get([
-
-      "lastNudgeTime",
-
-      "currentNudge"
-
-    ]);
-
-
-  const lastNudgeTime =
-    storage.lastNudgeTime as
-      | number
-      | undefined;
 
 
   if (
     !canShowNudge(
-      lastNudgeTime
+      state.lastNudgeAt ?? undefined
     )
   ) {
 
@@ -1582,7 +1673,10 @@ async function evaluateCurrentNudge():
         session.totalActiveTime,
 
       userState:
-        session.userState
+        session.userState,
+
+      failedAttempts:
+        state.failedAttempts
 
     });
 
@@ -1594,15 +1688,10 @@ async function evaluateCurrentNudge():
   }
 
 
-  await chrome.storage.local.set({
-
-    currentNudge:
-      nudge,
-
-    lastNudgeTime:
-      Date.now()
-
-  });
+  await saveNudge(
+    nudge,
+    problemSlug
+  );
 
 
   console.log(
@@ -1628,28 +1717,13 @@ interface MentorResponse {
 }
 
 
+// The mentor backend holds the OpenRouter API key and prompt, and
+// reads recent activity from PostgreSQL itself. The extension only
+// sends what it can see on the page.
 async function getMentorGuidance(
   question?: string,
   code?: string
 ): Promise<MentorResponse> {
-
-  const apiKey =
-    import.meta.env.VITE_OPENAI_API_KEY;
-
-
-  if (!apiKey) {
-
-    return {
-
-      success: false,
-
-      error:
-        "Add VITE_OPENAI_API_KEY to .env, then rebuild and reload the extension."
-
-    };
-
-  }
-
 
   await updateContextFromActiveTab();
 
@@ -1671,85 +1745,27 @@ async function getMentorGuidance(
   }
 
 
-  const session =
-    await getCurrentSession();
+  try {
 
-
-  const activities =
-    await getActivities();
-
-
-  const recentSignals =
-    activities
-      .filter(activity =>
-        activity.website === "leetcode" &&
-        activity.problemSlug === currentContext?.problemSlug
-      )
-      .slice(-25)
-      .map(activity => ({
-        type: activity.type,
-        at: new Date(activity.timestamp).toISOString(),
-        language: activity.programmingLanguage,
-        submissionResult: activity.submissionResult
-      }));
-
-
-  const learnerContext = {
-    problem: currentContext.title,
-    slug: currentContext.problemSlug,
-    difficulty: currentContext.difficulty,
-    topics: currentContext.topics,
-    programmingLanguage: currentContext.programmingLanguage,
-    activeMinutes: Math.floor(
-      (session?.totalActiveTime ?? 0) / 60000
-    ),
-    recentSignals,
-    currentCode:
-      code,
-    studentQuestion:
-      question?.trim() ||
-      "Give me the single most useful next step."
-  };
-
-
-  const response =
-    await fetch(
-      "https://openrouter.ai/api/v1/responses",
+    return await api<MentorResponse>(
+      "POST",
+      "/mentor",
       {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model:
-            import.meta.env.VITE_OPENAI_MODEL || "gpt-5-mini",
-          instructions: [
-            "You are a concise Socratic programming mentor.",
-            "Use the supplied metadata and activity signals to guide the student.",
-            "Do not provide a full solution, full code, or final algorithm unless the student explicitly asks for it.",
-            "Prefer one concrete next step, a clarifying question, or a small hint.",
-            "Acknowledge submission outcomes when relevant.",
-            "When currentCode is supplied, review it only to identify the next debugging or reasoning step.",
-            "Do not provide a full solution or replacement implementation."
-          ].join(" "),
-          input: JSON.stringify(learnerContext),
-          max_output_tokens: 350
-        })
+        problem: currentContext.title,
+        slug: currentContext.problemSlug,
+        difficulty: currentContext.difficulty,
+        topics: currentContext.topics,
+        programmingLanguage: currentContext.programmingLanguage,
+        currentCode: code,
+        studentQuestion: question
       }
     );
 
-
-  if (!response.ok) {
-
-    const errorBody =
-      await response.text();
-
+  } catch (error) {
 
     console.error(
-      "OpenRouter API response:",
-      response.status,
-      errorBody
+      `Mentor backend request failed (${BACKEND_URL}):`,
+      error
     );
 
 
@@ -1758,53 +1774,34 @@ async function getMentorGuidance(
       success: false,
 
       error:
-        "The mentor request failed. Check your OpenRouter API key, model, and credits."
+        error instanceof Error && error.message
+          ? error.message
+          : "Could not reach the mentor backend. Make sure it is running."
 
     };
 
   }
-
-
-  const data =
-    await response.json() as {
-      output_text?: string;
-    };
-
-
-  if (!data.output_text) {
-
-    return {
-
-      success: false,
-
-      error:
-        "The mentor returned an empty response. Please try again."
-
-    };
-
-  }
-
-
-  return {
-
-    success: true,
-    guidance:
-      data.output_text
-  };
 
 }
 
 
+const PROACTIVE_COOLDOWN =
+  8 * 60 * 1000;
+
+
+// After a failed AI call, wait a shorter time before retrying.
+const PROACTIVE_ERROR_COOLDOWN =
+  2 * 60 * 1000;
+
+
 async function maybeGenerateProactiveGuidance(
+  session: StudySession,
+  state: NudgeState,
   submissionResult?: string
 ): Promise<void> {
 
-  const session =
-    await getCurrentSession();
-
-
   if (
-    !session?.isActive ||
+    !session.isActive ||
     session.userState !== "active" ||
     currentContext?.website !== "leetcode" ||
     currentTabId === null
@@ -1853,29 +1850,15 @@ async function maybeGenerateProactiveGuidance(
   }
 
 
-  const storage =
-    await chrome.storage.local.get([
-      "lastProactiveMentorTime",
-      "lastProactiveMentorProblem"
-    ]);
-
-
-  const lastInsight =
-    storage.lastProactiveMentorTime as
-      | number
-      | undefined;
-
-
-  const lastProblem =
-    storage.lastProactiveMentorProblem as
-      | string
-      | undefined;
+  const cooldown =
+    state.lastProactiveType === "AI_MENTOR_ERROR"
+      ? PROACTIVE_ERROR_COOLDOWN
+      : PROACTIVE_COOLDOWN;
 
 
   if (
-    lastProblem === currentContext.problemSlug &&
-    lastInsight &&
-    Date.now() - lastInsight < 8 * 60 * 1000
+    state.lastProactiveAt &&
+    Date.now() - state.lastProactiveAt < cooldown
   ) {
 
     return;
@@ -1892,52 +1875,26 @@ async function maybeGenerateProactiveGuidance(
     );
 
 
-  if (!guidance.success || !guidance.guidance) {
-
-    await chrome.storage.local.set({
-
-      currentNudge: {
-        id:
-          `mentor-error-${Date.now()}`,
-        type:
-          "AI_MENTOR_ERROR",
-        message:
-          guidance.error ??
-          "The mentor could not generate guidance.",
-        priority:
-          "medium",
-        createdAt:
-          Date.now()
-      }
-
-    });
-
-    return;
-
-  }
+  const succeeded =
+    guidance.success &&
+    Boolean(guidance.guidance);
 
 
-  await chrome.storage.local.set({
-
-    currentNudge: {
-      id:
-        `mentor-${Date.now()}`,
+  await saveNudge(
+    {
       type:
-        "AI_MENTOR",
+        succeeded
+          ? "AI_MENTOR"
+          : "AI_MENTOR_ERROR",
       message:
-        guidance.guidance,
+        succeeded
+          ? guidance.guidance!
+          : guidance.error ??
+            "The mentor could not generate guidance.",
       priority:
-        "medium",
-      createdAt:
-        Date.now()
+        "medium"
     },
-
-    lastProactiveMentorTime:
-      Date.now(),
-
-    lastProactiveMentorProblem:
-      currentContext.problemSlug
-
-  });
+    currentContext.problemSlug
+  );
 
 }

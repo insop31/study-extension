@@ -15,7 +15,8 @@ export default defineManifest({
     "tabs",
     "activeTab",
     "sidePanel",
-    "idle"
+    "idle",
+    "identity"
   ],
 
   host_permissions: [
@@ -23,7 +24,7 @@ export default defineManifest({
     "https://*.leetcode.com/*",
     "https://www.youtube.com/*",
     "https://youtube.com/*",
-    "https://openrouter.ai/*"
+    "http://localhost:8787/*"
   ],
 
   background: {
@@ -33,7 +34,11 @@ export default defineManifest({
   },
 
   action: {
-    default_title: "Open Study Mentor"
+    default_title: "Open Study Mentor",
+    default_icon: {
+      "16": "public/icons/icon-16.png",
+      "32": "public/icons/icon-32.png"
+    }
   },
 
   side_panel: {
@@ -58,5 +63,10 @@ export default defineManifest({
     }
   ],
 
-  icons: {}
+  icons: {
+    "16": "public/icons/icon-16.png",
+    "32": "public/icons/icon-32.png",
+    "48": "public/icons/icon-48.png",
+    "128": "public/icons/icon-128.png"
+  }
 });

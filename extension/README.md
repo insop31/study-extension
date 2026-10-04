@@ -321,12 +321,12 @@ Website Context + User Activity + Study History + Behavior Analysis + AI
 
 ## Getting Started
 
-> ⚠️ The project is in the planning/early development stage. Update the steps below as the implementation takes shape.
+> ⚠️ The project is in early development. The LeetCode flow works end to end; YouTube-specific tracking, the dashboard and the backend are still planned.
 
 ```bash
 # Clone the repository
 git clone <your-repo-url>
-cd ai-study-mentor
+cd extension
 
 # Install dependencies
 npm install
@@ -342,7 +342,59 @@ npm run build
 3. Click **Load unpacked** and select the `dist/` folder.
 4. Open a LeetCode problem and open the side panel.
 
-**Configuration:** create a `.env` file with your AI API key and backend URL. Never commit it.
+**Backend (PostgreSQL + REST):**
+
+```bash
+cd ../backend
+npm install
+docker compose up -d     # PostgreSQL 16 on localhost:5433 (or point DATABASE_URL at your own server)
+cp .env.example .env     # set OPENROUTER_API_KEY (and optionally OPENROUTER_MODEL)
+npm run migrate          # creates the tables from db/schema.sql
+npm start                # http://127.0.0.1:8787
+```
+
+Sessions, activities, problem attempts, nudges and stats all live in PostgreSQL and are read and written through the REST API; the extension keeps only your sign-in token in `chrome.storage.local`. The OpenRouter key stays on the server. To use a different backend URL, set `VITE_BACKEND_URL` before `npm run build` and add that origin to `host_permissions` in `src/manifest.config.ts`.
+
+`npm test` runs the API tests against a throwaway embedded PostgreSQL (or `TEST_DATABASE_URL` if set).
+
+### Sign-in and Google setup
+
+The side panel asks you to sign in with email + password, or with Google. Passwords are stored as scrypt hashes; tokens are random, stored hashed, per device, and expire after 30 days. A Google account whose verified email matches an existing password account is linked to it.
+
+To enable **Continue with Google**:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials) create an **OAuth client ID** of type **Web application**.
+2. Add this **Authorized redirect URI**: `https://<EXTENSION_ID>.chromiumapp.org/` (the extension ID is shown at `chrome://extensions`; it changes if you load the unpacked folder from a different path).
+3. Put the client ID in `backend/.env` as `GOOGLE_CLIENT_ID` and in `extension/.env` as `VITE_GOOGLE_CLIENT_ID` (it is public, not a secret), then restart the backend and rebuild the extension.
+
+Without these, email + password sign-in still works and the Google button is hidden.
+
+### REST API
+
+All routes except `signup`, `login`, `google` and `health` need `Authorization: Bearer <token>`.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| POST | `/api/auth/signup` | Create an account with email + password, returns a token |
+| POST | `/api/auth/login` | Sign in with email + password |
+| POST | `/api/auth/google` | Sign in with a Google ID token (verified server-side) |
+| GET | `/api/auth/me` | The signed-in user |
+| POST | `/api/auth/logout` | Revoke this device's token |
+| GET | `/api/sessions/current` | Latest session (active or ended) |
+| GET | `/api/sessions` | Session history |
+| POST | `/api/sessions` | Start a session (ends any open one) |
+| PATCH | `/api/sessions/current/page` | Update the page being studied |
+| PUT | `/api/sessions/current/state` | Set `active` / `idle` / `paused` |
+| POST | `/api/sessions/current/activity` | Record an activity; returns the session and nudge state |
+| POST | `/api/sessions/current/end` | End the session |
+| GET | `/api/activities` | Recent activities (`problemSlug`, `limit`) |
+| GET / POST | `/api/nudges/current`, `/api/nudges` | Current nudge / store a nudge |
+| POST | `/api/nudges/:id/dismiss` | Dismiss a nudge |
+| POST | `/api/mentor` | Ask the AI mentor (context is read from the database) |
+| GET | `/api/stats/summary` | Weekly study time, solved count, per-topic success rate |
+| GET | `/api/health` | Liveness and database check |
+
+---
 
 ## Project Structure
 
@@ -358,8 +410,8 @@ ai-study-mentor/
 │   │   ├── sidepanel/      # React UI
 │   │   └── core/           # StudySession, ActivityTracker, ContextAnalyzer, NudgeEngine, Mentor
 ├── backend/
-│   ├── api/
-│   └── db/                 # schema and migrations
+│   ├── src/                # Express app, routes, session and mentor services
+│   └── db/                 # schema.sql and migrate.mjs
 ├── docs/
 └── README.md
 ```
