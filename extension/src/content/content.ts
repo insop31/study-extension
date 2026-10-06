@@ -1,6 +1,29 @@
 import type {
   PageContext,
-  Platform
+  Platform,
+  VideoInfo
+} from "../core/types";
+
+import {
+  ignorePlayerChanges,
+  startYouTubeTracker,
+  type VideoReport
+} from "./youtubeTracker";
+
+import {
+  hideMentorCard,
+  showMentorCard,
+  type CardHandlers
+} from "./recallPrompt";
+
+import {
+  getTranscriptExcerpt,
+  loadTranscript
+} from "./youtubeTranscript";
+
+import type {
+  QuizQuestion,
+  QuizResult
 } from "../core/types";
 
 import {
@@ -405,6 +428,11 @@ function getLeetCodeMetadata():
 // PAGE CONTEXT
 // --------------------------------------------------
 
+// The YouTube video on this page, once identified.
+let currentVideo:
+  VideoInfo | null = null;
+
+
 function getPageContext():
   PageContext {
 
@@ -423,7 +451,11 @@ function getPageContext():
     timestamp:
       Date.now(),
 
-    ...getLeetCodeMetadata()
+    ...getLeetCodeMetadata(),
+
+    ...(currentVideo
+      ? { video: currentVideo }
+      : {})
 
   };
 
@@ -674,6 +706,17 @@ function sendActivity(
   force = false
 ): void {
 
+  // Time on YouTube only counts while an educational video is open.
+  if (
+    getWebsite() === "youtube" &&
+    !currentVideo?.educational
+  ) {
+
+    return;
+
+  }
+
+
   const now =
     Date.now();
 
@@ -708,6 +751,9 @@ function sendActivity(
       visible:
         document.visibilityState ===
         "visible",
+
+      focused:
+        document.hasFocus(),
 
       context:
         getPageContext()
@@ -1064,6 +1110,34 @@ document.addEventListener(
 );
 
 
+// Losing or regaining focus is reported at once, so leaving Chrome shows
+// as idle straight away and coming back resumes straight away.
+window.addEventListener(
+  "blur",
+  () => {
+
+    sendActivity(
+      "visibility",
+      true
+    );
+
+  }
+);
+
+
+window.addEventListener(
+  "focus",
+  () => {
+
+    sendActivity(
+      "visibility",
+      true
+    );
+
+  }
+);
+
+
 // --------------------------------------------------
 // HEARTBEAT
 // --------------------------------------------------
@@ -1276,3 +1350,297 @@ setInterval(() => {
   }
 
 }, 1000);
+
+
+// --------------------------------------------------
+// YOUTUBE
+// --------------------------------------------------
+
+if (getWebsite() === "youtube") {
+
+  startYouTubeTracker(
+    (report: VideoReport) => {
+
+      try {
+
+        chrome.runtime.sendMessage({
+
+          type:
+            "YOUTUBE_PROGRESS",
+
+          report,
+
+          context:
+            getPageContext()
+
+        }).catch(() => {
+
+          // Extension may have been reloaded.
+
+        });
+
+      } catch {
+
+        // Ignore invalidated extension context.
+
+      }
+
+    },
+    video => {
+
+      currentVideo =
+        video;
+
+      hideMentorCard();
+
+      sendPageContext();
+
+      // Read the transcript early, once the page has settled, so that a
+      // quiz question later can be about what was actually said.
+      if (video?.educational) {
+
+        const videoId =
+          video.videoId;
+
+        window.setTimeout(
+          () => {
+
+            if (currentVideo?.videoId === videoId) {
+
+              void loadTranscript(videoId);
+
+            }
+
+          },
+          4000
+        );
+
+      }
+
+    }
+  );
+
+
+  function playerElement():
+    HTMLVideoElement | null {
+
+    return document.querySelector<HTMLVideoElement>(
+      "video.html5-main-video"
+    );
+
+  }
+
+
+  // The video was paused to give the learner a moment to answer.
+  let pausedForQuiz = false;
+
+
+  function pauseForQuiz(): void {
+
+    const video =
+      playerElement();
+
+    if (video && !video.paused) {
+
+      ignorePlayerChanges();
+
+      video.pause();
+
+      pausedForQuiz =
+        true;
+
+    }
+
+  }
+
+
+  function resumeAfterQuiz(): void {
+
+    const video =
+      playerElement();
+
+    if (video && pausedForQuiz) {
+
+      ignorePlayerChanges();
+
+      void video.play().catch(() => {
+
+        // The browser may refuse to start playback without a click.
+
+      });
+
+    }
+
+    pausedForQuiz =
+      false;
+
+  }
+
+
+  const cardHandlers: CardHandlers = {
+
+    onDismiss: nudgeId => {
+
+      resumeAfterQuiz();
+
+      chrome.runtime.sendMessage({
+        type: "DISMISS_NUDGE",
+        nudgeId
+      }).catch(() => {
+
+        // Extension may have been reloaded.
+
+      });
+
+    },
+
+    onAnswer: async (quizId, chosenIndex) => {
+
+      try {
+
+        const result =
+          await chrome.runtime.sendMessage({
+            type: "ANSWER_QUIZ",
+            quizId,
+            chosenIndex
+          }) as (QuizResult & { success?: boolean }) | undefined;
+
+        return result?.success === false || !result
+          ? null
+          : result;
+
+      } catch {
+
+        return null;
+
+      }
+
+    },
+
+    onRewatch: startS => {
+
+      const video =
+        playerElement();
+
+      pausedForQuiz =
+        false;
+
+      if (video) {
+
+        ignorePlayerChanges(2500);
+
+        video.currentTime =
+          startS;
+
+        void video.play().catch(() => {
+
+          // The browser may refuse to start playback without a click.
+
+        });
+
+      }
+
+    }
+
+  };
+
+
+  chrome.runtime.onMessage.addListener(
+    (message, _sender, sendResponse) => {
+
+      // The background script asks this when the learner leaves the tab
+      // or the window, to attribute the change to the right video.
+      if (message?.type === "GET_VIDEO_INFO") {
+
+        sendResponse(
+          currentVideo?.educational
+            ? currentVideo
+            : null
+        );
+
+        return;
+
+      }
+
+
+      // For a quiz question: where the learner is, and what was said
+      // in the minutes before.
+      if (message?.type === "GET_TRANSCRIPT_EXCERPT") {
+
+        const video =
+          playerElement();
+
+        if (!currentVideo?.educational || !video) {
+
+          sendResponse(null);
+
+          return;
+
+        }
+
+        const videoId =
+          currentVideo.videoId;
+
+        const positionS =
+          video.currentTime;
+
+        getTranscriptExcerpt(videoId, positionS)
+          .then(excerpt => {
+
+            sendResponse({
+              videoId,
+              positionS,
+              excerpt
+            });
+
+          })
+          .catch(() => {
+
+            sendResponse({
+              videoId,
+              positionS,
+              excerpt: null
+            });
+
+          });
+
+        return true;
+
+      }
+
+
+      if (message?.type === "SHOW_RECALL_PROMPT") {
+
+        showMentorCard(
+          {
+            nudgeId: message.nudgeId,
+            message: message.message,
+            loading: Boolean(message.loading)
+          },
+          cardHandlers
+        );
+
+        return;
+
+      }
+
+
+      if (message?.type === "SHOW_QUIZ") {
+
+        pauseForQuiz();
+
+        showMentorCard(
+          {
+            nudgeId: message.nudgeId,
+            message: message.message,
+            quiz: message.quiz as QuizQuestion
+          },
+          cardHandlers
+        );
+
+      }
+
+    }
+  );
+
+}

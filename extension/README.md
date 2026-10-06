@@ -357,6 +357,65 @@ Sessions, activities, problem attempts, nudges and stats all live in PostgreSQL 
 
 `npm test` runs the API tests against a throwaway embedded PostgreSQL (or `TEST_DATABASE_URL` if set).
 
+### YouTube tracking (Phase 2)
+
+On `youtube.com/watch` pages the extension first decides whether the video is **educational**, from YouTube's own category plus teaching wording and subject keywords in the title and description (`src/core/youtubeClassifier.ts`). Music, gaming, vlogs, trailers and the like are identified and then ignored: they are not tracked and don't count as study time. Ads are ignored too.
+
+For an educational video it records the title, channel, topics (e.g. "Dynamic Programming") and, from the player itself:
+
+| Signal | How it is measured |
+| --- | --- |
+| Watch duration | Seconds of video actually played, skipped parts excluded; percent of the video reached |
+| Pauses | Pause events (not seeks, not the end of the video) |
+| Skipping | Forward jumps of 5 s or more, and how many seconds were skipped; backward jumps are counted as rewinds |
+| Tab change | The learner switched to another Chrome tab (counted by the background script from `chrome.tabs.onActivated`) |
+| Window change | The learner left Chrome for another application or window. Detected two ways, so it does not depend on one browser event: Chrome's `windows.onFocusChanged`, and the page reporting that it lost focus (unless the side panel took the focus). Counted once per departure |
+| Active watching | Share of playing time with the tab visible and the window focused |
+
+Totals are stored per video per study session in `video_watches` and shown in the side panel.
+
+**Idle state.** The session goes idle when the learner leaves Chrome for another application (not only when the computer is unused), and a playing video only counts as studying while Chrome has focus.
+
+**Mentor notes while watching** (shown in the side panel and as a card on the video page; at least 90 seconds apart; rules in `backend/src/services/videoMentor.mjs`):
+
+| Note | When | Message |
+| --- | --- | --- |
+| Recall | pause after ~1.5 min watched, ~4 min watched in a row, or the video ends | "Pause for a moment. Can you explain the concept you just learned without replaying the video?" |
+| Focus | 3 tab/window changes since the last note | suggests keeping the video in focus or pausing it |
+| Skipping | about 2 minutes skipped since the last note | suggests noting what was missed (names the topic) |
+| Confusion check | 3 rewinds since the last note | asks which part is tricky |
+
+Recall prompts are skipped when the last stretch was mostly watched with the tab hidden or unfocused.
+
+**Quiz questions.** Each recall prompt comes with a multiple-choice question about the few minutes you just watched, so the mentor can check that you are actually learning:
+
+1. The extension reads the video's transcript from YouTube's own "Show transcript" panel (hidden while it does, closed afterwards) and sends the last ~4 minutes to the backend. YouTube no longer lets scripts fetch captions directly, so this is the only reliable source. If a video has no transcript, the question is written from its title and topics instead and says so.
+2. The backend asks the AI model (the same OpenRouter key as the mentor) for one question with four options. The correct answer and explanation stay on the server until you answer, and options are shuffled.
+3. The video pauses while you answer. You are told straight away whether you were right. If you were wrong, the mentor shows the right answer, explains it, and offers **Watch this part again**, which jumps the video to the relevant moment (those jumps are not counted as skipping or rewinding). Your score for the video appears in the side panel and in `/api/stats/summary`.
+
+If a question can't be written (rate limit, no API key, offline), you still get the plain recall prompt.
+
+### Learning dashboard (Phase 3)
+
+Click **📊 Open learning dashboard** in the side panel. It opens as a full page in its own tab (an extension page, so it uses your existing sign-in) and refreshes every minute. It shows:
+
+- **Weekly study time:** the last 7 days split by LeetCode / YouTube, against your daily goal (editable on the page), with a table view; an 8-week trend and a 12-week activity heatmap; streak, sessions and average session length.
+- **Problems solved and success rate:** solved / attempted problems (the README's definition), accepted-submission rate, first-try solves, average time to solve, and a breakdown by difficulty.
+- **Topics studied:** every topic from LeetCode tags and video topics (merged, so "Array" and "Arrays" are one topic) with problems solved, success rate, average solve time, video quiz score, study time and a 0-100 **mastery** score. Topics are rated Strong / Moderate / **Weak** once there are at least 3 submissions or quiz answers.
+- **Recommendations:** rule-based and ordered by importance: strengthen weak topics (with a link to easy problems), practise topics you only watched videos about, finish unsolved problems, study more consistently, react to a drop in study time, move up to Medium, and what to learn next from the topic graph.
+- **AI study plan:** on request, the AI model writes a short personal plan for the week from the same data. The latest plan is kept.
+
+Days follow your own time zone, which the dashboard sets from your browser.
+
+**Data behind it** (added to `db/schema.sql`; `npm run migrate` adds the tables and backfills from existing history):
+
+| Table | Holds |
+| --- | --- |
+| `study_time_daily` | Active study time per learner, per local day, per platform |
+| `problem_progress` | Per learner and problem: time spent, attempts, accepted, when first solved and how long that took |
+| `coach_reports` | AI study plans |
+| `users.timezone`, `users.daily_goal_minutes` | Calendar days and the daily goal |
+
 ### Sign-in and Google setup
 
 The side panel asks you to sign in with email + password, or with Google. Passwords are stored as scrypt hashes; tokens are random, stored hashed, per device, and expire after 30 days. A Google account whose verified email matches an existing password account is linked to it.
@@ -391,6 +450,14 @@ All routes except `signup`, `login`, `google` and `health` need `Authorization: 
 | GET / POST | `/api/nudges/current`, `/api/nudges` | Current nudge / store a nudge |
 | POST | `/api/nudges/:id/dismiss` | Dismiss a nudge |
 | POST | `/api/mentor` | Ask the AI mentor (context is read from the database) |
+| POST | `/api/youtube/quiz` | Ask for a question about the part just watched (answer withheld) |
+| POST | `/api/youtube/quiz/:id/answer` | Submit an answer; returns right/wrong, the explanation and the part to rewatch |
+| POST | `/api/youtube/progress` | Add a report of watching activity for a video; may return a recall prompt |
+| GET | `/api/youtube/watches/current` | Running totals for a video (`videoId`) in the current session |
+| GET | `/api/youtube/watches` | Recent video watch history |
+| GET | `/api/dashboard` | Everything the learning dashboard shows, including recommendations |
+| GET / POST | `/api/dashboard/coach` | Latest AI study plan / write a new one |
+| GET / PUT | `/api/me/preferences` | Time zone and daily study goal |
 | GET | `/api/stats/summary` | Weekly study time, solved count, per-topic success rate |
 | GET | `/api/health` | Liveness and database check |
 

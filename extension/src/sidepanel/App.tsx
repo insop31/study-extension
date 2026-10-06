@@ -1,12 +1,14 @@
 import {
   useEffect,
+  useRef,
   useState
 } from "react";
 
 import type {
   PageContext as StudyContext,
   Nudge,
-  AuthUser
+  AuthUser,
+  VideoWatch
 } from "../core/types";
 
 import AuthScreen from "./AuthScreen";
@@ -89,6 +91,12 @@ function Dashboard({
 
   const [mentorLoading, setMentorLoading] =
     useState(false);
+
+  const [watch, setWatch] =
+    useState<VideoWatch | null>(null);
+
+  const loadWatchRef =
+    useRef<() => void>(() => {});
 
 
   // ------------------------------------------------
@@ -209,13 +217,76 @@ function Dashboard({
   // LOAD EVERYTHING
   // ------------------------------------------------
 
+  function loadWatch(): void {
+
+    const videoId =
+      context?.video?.educational
+        ? context.video.videoId
+        : null;
+
+    if (!videoId) {
+
+      setWatch(null);
+
+      return;
+
+    }
+
+    chrome.runtime.sendMessage(
+      { type: "GET_VIDEO_STATS", videoId },
+      (response: VideoWatch | null | undefined) => {
+
+        if (chrome.runtime.lastError) {
+
+          return;
+
+        }
+
+        setWatch(response ?? null);
+
+      }
+    );
+
+  }
+
+
+  useEffect(() => {
+
+    loadWatchRef.current =
+      loadWatch;
+
+  });
+
+
+  function reportPanelFocus(
+    focused = document.hasFocus()
+  ): void {
+
+    chrome.runtime.sendMessage({
+      type: "PANEL_FOCUS",
+      focused
+    }).catch(() => {
+
+      // The extension is reloading.
+
+    });
+
+  }
+
+
   function loadData(): void {
+
+    // Tells the background script that focus is in the side panel (so
+    // clicking it is not mistaken for leaving Chrome).
+    reportPanelFocus();
 
     loadContext();
 
     loadSession();
 
     loadNudge();
+
+    loadWatchRef.current();
 
   }
 
@@ -227,6 +298,50 @@ function Dashboard({
   useEffect(() => {
 
     loadData();
+
+  }, []);
+
+
+  // ------------------------------------------------
+  // PANEL FOCUS
+  // ------------------------------------------------
+  //
+  // Clicking this panel takes focus from the study page. Saying so at
+  // once keeps that from looking like leaving Chrome.
+
+  useEffect(() => {
+
+    const report =
+      (focused: boolean) => {
+
+        chrome.runtime.sendMessage({
+          type: "PANEL_FOCUS",
+          focused
+        }).catch(() => {
+
+          // The extension is reloading.
+
+        });
+
+      };
+
+    const onFocus =
+      () => report(true);
+
+    const onBlur =
+      () => report(false);
+
+    window.addEventListener("focus", onFocus);
+
+    window.addEventListener("blur", onBlur);
+
+    return () => {
+
+      window.removeEventListener("focus", onFocus);
+
+      window.removeEventListener("blur", onBlur);
+
+    };
 
   }, []);
 
@@ -383,6 +498,24 @@ function formatTime(
 }
 
 
+  function formatSeconds(
+    totalSeconds: number
+  ): string {
+
+    const seconds =
+      Math.floor(totalSeconds);
+
+    const minutes =
+      Math.floor(seconds / 60);
+
+    const rest =
+      String(seconds % 60).padStart(2, "0");
+
+    return `${minutes}:${rest}`;
+
+  }
+
+
   // ------------------------------------------------
   // STATE LABEL
   // ------------------------------------------------
@@ -458,7 +591,7 @@ function formatTime(
       "idle"
     ) {
 
-      return "No recent computer activity detected.";
+      return "You've stepped away from the study page or from Chrome.";
 
     }
 
@@ -543,6 +676,20 @@ function formatTime(
 
         </div>
 
+
+        <button
+          className="dashboard-button"
+          onClick={() => {
+
+            void chrome.tabs.create({
+              url: chrome.runtime.getURL("src/dashboard/index.html")
+            });
+
+          }}
+        >
+          📊 Open learning dashboard
+        </button>
+
       </header>
 
 
@@ -602,6 +749,161 @@ function formatTime(
                   </span>
 
                 </div>
+
+              </>
+
+            )}
+
+
+            {context.website === "youtube" && (
+
+              <>
+
+                {context.video ? (
+
+                  <>
+
+                    <div className="activity">
+
+                      <span className="label">
+                        Video
+                      </span>
+
+                      <span>
+                        {context.video.title}
+                      </span>
+
+                    </div>
+
+
+                    <div className="activity">
+
+                      <span className="label">
+                        Type
+                      </span>
+
+                      <span>
+                        {context.video.educational
+                          ? "Educational"
+                          : "Not educational (not tracked)"}
+                      </span>
+
+                    </div>
+
+
+                    {context.video.educational && (
+
+                      <>
+
+                        <div className="activity">
+
+                          <span className="label">
+                            Topics
+                          </span>
+
+                          <span>
+                            {context.video.topics.length > 0
+                              ? context.video.topics.join(", ")
+                              : "Detecting..."}
+                          </span>
+
+                        </div>
+
+
+                        {watch && (
+
+                          <div className="video-stats">
+
+                            <div>
+                              <strong>
+                                {formatSeconds(watch.watchedS)}
+                              </strong>
+                              <small>Watched</small>
+                            </div>
+
+                            <div>
+                              <strong>
+                                {watch.percentWatched}%
+                              </strong>
+                              <small>Reached</small>
+                            </div>
+
+                            <div>
+                              <strong>
+                                {watch.activePercent}%
+                              </strong>
+                              <small>Active</small>
+                            </div>
+
+                            <div>
+                              <strong>
+                                {watch.pauseCount}
+                              </strong>
+                              <small>Pauses</small>
+                            </div>
+
+                            <div>
+                              <strong>
+                                {watch.skipCount}
+                              </strong>
+                              <small>Skips</small>
+                            </div>
+
+                            <div>
+                              <strong>
+                                {watch.rewindCount}
+                              </strong>
+                              <small>Rewinds</small>
+                            </div>
+
+                            <div>
+                              <strong>
+                                {watch.tabChanges}
+                              </strong>
+                              <small>Tab changes</small>
+                            </div>
+
+                            <div>
+                              <strong>
+                                {watch.windowChanges}
+                              </strong>
+                              <small>Window changes</small>
+                            </div>
+
+                          </div>
+
+                        )}
+
+
+                        {watch?.quiz && watch.quiz.asked > 0 && (
+
+                          <div className="activity">
+
+                            <span className="label">
+                              Quiz
+                            </span>
+
+                            <span>
+                              {watch.quiz.correct} of {watch.quiz.answered} answered correctly
+                            </span>
+
+                          </div>
+
+                        )}
+
+                      </>
+
+                    )}
+
+                  </>
+
+                ) : (
+
+                  <p className="muted">
+                    Open a video to check whether it is educational.
+                  </p>
+
+                )}
 
               </>
 

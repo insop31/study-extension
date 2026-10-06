@@ -5,7 +5,7 @@ export const IDLE_THRESHOLD_MS = 60 * 1000;
 
 // Activity types that are stored as rows. Heartbeats and mouse movement still
 // advance the session timer but would only bloat the table.
-const NOISY_ACTIVITY_TYPES = new Set(["heartbeat", "mousemove"]);
+const NOISY_ACTIVITY_TYPES = new Set(["heartbeat", "mousemove", "video_watch"]);
 
 const FINAL_VERDICT_EXCLUDED = new Set(["submitted"]);
 
@@ -48,12 +48,71 @@ export function createSessionService(pool, now = () => new Date()) {
     );
   }
 
+  // Adds credited study time to the learner's day (in their time zone).
+  async function creditDay(client, userId, platform, at, ms) {
+    if (ms <= 0) return;
+    await client.query(
+      `INSERT INTO study_time_daily (user_id, day, platform, active_ms)
+       SELECT $1, ($2::timestamptz AT TIME ZONE u.timezone)::date, $3, $4
+       FROM users u WHERE u.id = $1
+       ON CONFLICT (user_id, day, platform)
+       DO UPDATE SET active_ms = study_time_daily.active_ms + EXCLUDED.active_ms`,
+      [userId, at, platform, ms]
+    );
+  }
+
+  // Time on the problem, attempts, and the first time it was solved.
+  async function updateProblemProgress(client, userId, problemId, at, { creditedMs, verdict }) {
+    const accepted = verdict === "accepted";
+    await client.query(
+      `INSERT INTO problem_progress
+         (user_id, problem_id, first_seen, last_seen, active_ms, attempts, accepted, solved_at, solve_ms)
+       VALUES ($1, $2, $3::timestamptz, $3::timestamptz, $4::bigint, $5::int, $6::int,
+               CASE WHEN $6::int > 0 THEN $3::timestamptz END,
+               CASE WHEN $6::int > 0 THEN $4::bigint END)
+       ON CONFLICT (user_id, problem_id) DO UPDATE SET
+         last_seen = EXCLUDED.last_seen,
+         active_ms = problem_progress.active_ms + EXCLUDED.active_ms,
+         attempts = problem_progress.attempts + EXCLUDED.attempts,
+         accepted = problem_progress.accepted + EXCLUDED.accepted,
+         solved_at = COALESCE(problem_progress.solved_at, EXCLUDED.solved_at),
+         solve_ms = COALESCE(
+           problem_progress.solve_ms,
+           CASE WHEN EXCLUDED.accepted > 0
+                THEN problem_progress.active_ms + EXCLUDED.active_ms END
+         )`,
+      [userId, problemId, at, creditedMs, verdict ? 1 : 0, accepted ? 1 : 0]
+    );
+  }
+
   async function getCurrent(userId) {
     return toSession(await currentRow(pool, userId));
   }
 
-  async function start(userId, { website, title, url }) {
+  // Serialises session changes per user, so a burst of page events can
+  // never create overlapping sessions.
+  async function lockUser(client, userId) {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [userId]
+    );
+  }
+
+  async function insertSession(client, userId, { website, title, url }, at) {
+    const { rows } = await client.query(
+      `INSERT INTO study_sessions
+         (user_id, website, current_page, current_url, start_time,
+          last_activity_time, status, user_state)
+       VALUES ($1, $2, $3, $4, $5, $5, 'active', 'active')
+       RETURNING *`,
+      [userId, website, title, url, at]
+    );
+    return rows[0];
+  }
+
+  async function start(userId, page) {
     return withTx(pool, async client => {
+      await lockUser(client, userId);
       const at = now();
 
       // Only one session may be open at a time.
@@ -65,22 +124,18 @@ export function createSessionService(pool, now = () => new Date()) {
       );
       await dismissOpenNudges(client, userId);
 
-      const { rows } = await client.query(
-        `INSERT INTO study_sessions
-           (user_id, website, current_page, current_url, start_time,
-            last_activity_time, status, user_state)
-         VALUES ($1, $2, $3, $4, $5, $5, 'active', 'active')
-         RETURNING *`,
-        [userId, website, title, url, at]
-      );
-      return toSession(rows[0]);
+      return toSession(await insertSession(client, userId, page, at));
     });
   }
 
-  async function updatePage(userId, { website, title, url }) {
-    const session = await withTx(pool, async client => {
+  // Follows the learner to a new page. Starts a session if there is none;
+  // an ended session stays ended.
+  async function updatePage(userId, page) {
+    return withTx(pool, async client => {
+      await lockUser(client, userId);
+
       const row = await currentRow(client, userId, { lock: true });
-      if (!row) return null;
+      if (!row) return toSession(await insertSession(client, userId, page, now()));
       if (row.status !== "active") return toSession(row);
 
       const { rows } = await client.query(
@@ -88,12 +143,10 @@ export function createSessionService(pool, now = () => new Date()) {
          SET website = $2, current_page = $3, current_url = $4
          WHERE id = $1
          RETURNING *`,
-        [row.id, website, title, url]
+        [row.id, page.website, page.title, page.url]
       );
       return toSession(rows[0]);
     });
-
-    return session ?? start(userId, { website, title, url });
   }
 
   async function upsertProblem(client, { website, problemSlug, title, difficulty, topics }) {
@@ -182,10 +235,25 @@ export function createSessionService(pool, now = () => new Date()) {
       );
       const session = rows[0];
 
+      // The slice since the last activity was spent on the previous page.
+      await creditDay(client, userId, row.website, at, credited);
+
       const hasProblem = input.website === "leetcode" && input.problemSlug;
       const problemId = hasProblem
         ? await upsertProblem(client, { ...input, website: input.website })
         : null;
+
+      const verdict =
+        input.submissionResult && !FINAL_VERDICT_EXCLUDED.has(input.submissionResult)
+          ? input.submissionResult
+          : null;
+
+      if (problemId) {
+        await updateProblemProgress(client, userId, problemId, at, {
+          creditedMs: row.website === "leetcode" ? credited : 0,
+          verdict
+        });
+      }
 
       if (!NOISY_ACTIVITY_TYPES.has(input.activityType)) {
         await client.query(
@@ -204,11 +272,7 @@ export function createSessionService(pool, now = () => new Date()) {
       }
 
       // A final verdict (not the bare "submitted" click) counts as an attempt.
-      if (
-        problemId &&
-        input.submissionResult &&
-        !FINAL_VERDICT_EXCLUDED.has(input.submissionResult)
-      ) {
+      if (problemId && verdict) {
         const { rows: [count] } = await client.query(
           `SELECT count(*)::int AS n FROM problem_attempts
            WHERE user_id = $1 AND problem_id = $2`,
@@ -259,6 +323,7 @@ export function createSessionService(pool, now = () => new Date()) {
          RETURNING *`,
         [row.id, credited, at, state]
       );
+      await creditDay(client, userId, row.website, at, credited);
       return toSession(rows[0]);
     });
   }
@@ -285,6 +350,7 @@ export function createSessionService(pool, now = () => new Date()) {
          RETURNING *`,
         [row.id, credited, at]
       );
+      await creditDay(client, userId, row.website, at, credited);
       await dismissOpenNudges(client, userId);
       return toSession(rows[0]);
     });

@@ -125,41 +125,8 @@ export function evaluateNudge(
   }
 
 
-  // ------------------------------------------------
-  // YOUTUBE
-  // ------------------------------------------------
-
-  if (
-    context.website ===
-    "youtube"
-  ) {
-
-    if (
-      activeMinutes >= 15
-    ) {
-
-      return {
-
-        id:
-          `youtube-${Date.now()}`,
-
-        type:
-          "ACTIVE_RECALL",
-
-        priority:
-          "low",
-
-        message:
-          "Pause for a moment. Can you explain the main idea from what you just watched without looking back at the video?",
-
-        createdAt:
-          Date.now()
-
-      };
-
-    }
-
-  }
+  // YouTube recall prompts are decided by the backend from real
+  // watch data (see youtubeService), not from elapsed time alone.
 
 
   return null;

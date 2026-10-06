@@ -1,7 +1,8 @@
 import { createApp } from "./src/app.mjs";
 import { createPool } from "./src/db.mjs";
 import { createGoogleVerifier } from "./src/services/googleVerifier.mjs";
-import { createMentorClient } from "./src/services/mentorClient.mjs";
+import { createCompleter, createMentorClient } from "./src/services/mentorClient.mjs";
+import { createQuizGenerator } from "./src/services/quizGenerator.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
 
@@ -20,12 +21,18 @@ if (!process.env.GOOGLE_CLIENT_ID) {
 
 const pool = createPool(process.env.DATABASE_URL);
 
+const model = process.env.OPENROUTER_MODEL || "google/gemma-4-26b-a4b-it:free";
+
+const completeText = createCompleter({ apiKey: process.env.OPENROUTER_API_KEY, model });
+
 const app = createApp({
   pool,
+  generateQuiz: createQuizGenerator(completeText),
+  completeText,
   verifyGoogleToken: createGoogleVerifier(process.env.GOOGLE_CLIENT_ID),
   askMentor: createMentorClient({
     apiKey: process.env.OPENROUTER_API_KEY,
-    model: process.env.OPENROUTER_MODEL || "google/gemma-4-26b-a4b-it:free"
+    model
   })
 });
 

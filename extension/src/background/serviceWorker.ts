@@ -3,8 +3,21 @@ import {
 } from "../storage/storage";
 
 import type {
-  PageContext
+  PageContext,
+  QuizQuestion,
+  QuizResult,
+  VideoDelta,
+  VideoInfo,
+  VideoWatch
 } from "../core/types";
+
+import {
+  emptyDelta
+} from "../core/videoDelta";
+
+import type {
+  VideoReport
+} from "../content/youtubeTracker";
 
 import {
   detectPlatform
@@ -77,6 +90,17 @@ interface Message {
 
   password?: string;
 
+  report?: VideoReport;
+
+  videoId?: string;
+
+  quizId?: string;
+
+  chosenIndex?: number;
+
+  // Whether the page that sent the message has keyboard focus.
+  focused?: boolean;
+
 }
 
 
@@ -137,6 +161,127 @@ self.addEventListener(
 chrome.idle.setDetectionInterval(
   15
 );
+
+
+// --------------------------------------------------
+// BROWSER FOCUS
+// --------------------------------------------------
+//
+// chrome.idle only knows whether the computer is in use. A learner
+// working in another application is "active" to Chrome, but they are
+// not studying, so counting also needs Chrome to have focus.
+//
+
+// The learner is "in the browser" when Chrome has focus AND that focus is
+// on the study page or on this extension's side panel (not the address bar
+// or another application). Chrome's window events alone have proved
+// unreliable for this, so the pages report their own focus too.
+let pageFocused =
+  true;
+
+// The side panel reports every couple of seconds while it has focus.
+let panelFocusedUntil =
+  0;
+
+
+function panelHasFocus(): boolean {
+
+  return Date.now() < panelFocusedUntil;
+
+}
+
+
+async function userIsInBrowser():
+  Promise<boolean> {
+
+  return (
+    await isBrowserFocused() &&
+    (pageFocused || panelHasFocus())
+  );
+
+}
+
+
+// Per tab, so one focus loss is not counted twice when both Chrome's
+// window event and the page's own blur report it.
+const lastWindowChangeAt =
+  new Map<number, number>();
+
+
+async function countWindowChange(
+  tabId: number
+): Promise<void> {
+
+  const previous =
+    lastWindowChangeAt.get(tabId) ?? 0;
+
+  if (Date.now() - previous < 3000) {
+
+    return;
+
+  }
+
+  lastWindowChangeAt.set(tabId, Date.now());
+
+  await recordVideoEvent(
+    tabId,
+    { windowChanges: 1 },
+    "blur"
+  );
+
+}
+
+
+// A page lost focus. If it went to the side panel the learner is still
+// studying; otherwise they have left the page or Chrome.
+async function handleFocusLost(
+  tabId?: number
+): Promise<void> {
+
+  // Give the side panel a moment to report that it took the focus.
+  await new Promise(resolve =>
+    setTimeout(resolve, 400)
+  );
+
+  if (
+    panelHasFocus() ||
+    !await getToken()
+  ) {
+
+    return;
+
+  }
+
+  await setUserState(
+    "idle"
+  );
+
+  if (tabId !== undefined) {
+
+    await countWindowChange(tabId);
+
+  }
+
+}
+
+
+async function isBrowserFocused():
+  Promise<boolean> {
+
+  try {
+
+    const lastFocused =
+      await chrome.windows.getLastFocused();
+
+    return lastFocused.focused;
+
+  } catch {
+
+    return true;
+
+  }
+
+}
 
 
 async function getLeetCodeDifficulty(
@@ -307,7 +452,9 @@ async function updateContextFromActiveTab():
           topics:
             currentContext.topics,
           programmingLanguage:
-            currentContext.programmingLanguage
+            currentContext.programmingLanguage,
+          video:
+            currentContext.video
         }
       : {})
 
@@ -333,7 +480,8 @@ async function updateContextFromActiveTab():
 
   if (
     session?.isActive &&
-    await chrome.idle.queryState(15) === "active"
+    await chrome.idle.queryState(15) === "active" &&
+    await userIsInBrowser()
   ) {
 
     await setUserState(
@@ -413,8 +561,29 @@ chrome.tabs.onActivated.addListener(
     activeInfo
   ) => {
 
+    const previousTabId =
+      currentTabId;
+
     currentTabId =
       activeInfo.tabId;
+
+    pageFocused =
+      true;
+
+
+    // Switching Chrome tabs while watching a lecture is a tab change.
+    if (
+      previousTabId !== null &&
+      previousTabId !== activeInfo.tabId
+    ) {
+
+      recordVideoEvent(
+        previousTabId,
+        { tabChanges: 1 },
+        "visibility"
+      ).catch(logUnlessSignedOut("Tab change"));
+
+    }
 
 
     pageVisible =
@@ -532,7 +701,10 @@ chrome.tabs.onUpdated.addListener(
       await chrome.idle.queryState(15);
 
 
-    if (chromeState === "active") {
+    if (
+      chromeState === "active" &&
+      await userIsInBrowser()
+    ) {
 
       await setUserState(
         "active"
@@ -565,6 +737,115 @@ chrome.tabs.onUpdated.addListener(
         currentContext.url
 
       );
+
+    }
+
+  }
+);
+
+
+// --------------------------------------------------
+// WINDOW FOCUS
+// --------------------------------------------------
+//
+// Fires with WINDOW_ID_NONE when the learner leaves Chrome for another
+// application, and with a window id when they come back or move to
+// another Chrome window.
+//
+
+let lastFocusedWindowId: number =
+  chrome.windows.WINDOW_ID_NONE;
+
+
+function logUnlessSignedOut(
+  label: string
+): (error: unknown) => void {
+
+  return error => {
+
+    if (!(error instanceof NotSignedInError)) {
+
+      console.error(
+        `${label} error:`,
+        error
+      );
+
+    }
+
+  };
+
+}
+
+
+chrome.windows.onFocusChanged.addListener(
+  async windowId => {
+
+    const previousWindowId =
+      lastFocusedWindowId;
+
+    lastFocusedWindowId =
+      windowId;
+
+
+    try {
+
+      if (windowId === chrome.windows.WINDOW_ID_NONE) {
+
+        // Left Chrome for another application: not studying right now.
+        await setUserState(
+          "idle"
+        );
+
+        console.log(
+          "🟡 LEFT CHROME"
+        );
+
+        const left =
+          await chrome.windows.getLastFocused({
+            populate: true
+          });
+
+        const leftTab =
+          left.tabs?.find(tab => tab.active);
+
+        if (leftTab?.id !== undefined) {
+
+          await countWindowChange(leftTab.id);
+
+        }
+
+        return;
+
+      }
+
+
+      // Moved from one Chrome window to another.
+      if (
+        previousWindowId !== chrome.windows.WINDOW_ID_NONE &&
+        previousWindowId !== windowId
+      ) {
+
+        const [leftTab] =
+          await chrome.tabs.query({
+            active: true,
+            windowId: previousWindowId
+          });
+
+        if (leftTab?.id !== undefined) {
+
+          await countWindowChange(leftTab.id);
+
+        }
+
+      }
+
+
+      // Back in Chrome: resume if the learner is on a study page.
+      await updateContextFromActiveTab();
+
+    } catch (error) {
+
+      logUnlessSignedOut("Window focus")(error);
 
     }
 
@@ -645,7 +926,8 @@ chrome.idle.onStateChanged.addListener(
 
       if (
         pageVisible &&
-        currentContext
+        currentContext &&
+        await userIsInBrowser()
       ) {
 
         await setUserState(
@@ -791,6 +1073,152 @@ chrome.runtime.onMessage.addListener(
 
 
     // ==============================================
+    // YOUTUBE VIDEO PROGRESS
+    // ==============================================
+
+    if (
+      message.type === "YOUTUBE_PROGRESS" &&
+      message.report
+    ) {
+
+      // A report from a tab the learner just left is still real watching
+      // data, so it is recorded. It just must not change what the
+      // extension thinks the learner is looking at now.
+      const fromCurrentTab =
+        !(
+          sender.tab?.id &&
+          currentTabId !== null &&
+          sender.tab.id !== currentTabId
+        );
+
+
+      if (fromCurrentTab) {
+
+        if (message.context) {
+
+          currentContext =
+            message.context;
+
+        }
+
+
+        if (sender.tab?.id) {
+
+          currentTabId =
+            sender.tab.id;
+
+        }
+
+
+        pageVisible =
+          message.report.visible;
+
+        pageFocused =
+          message.report.focused;
+
+      }
+
+
+      if (message.report.event === "blur") {
+
+        handleFocusLost(sender.tab?.id).catch(
+          logUnlessSignedOut("Focus loss")
+        );
+
+      }
+
+
+      handleYouTubeProgress(
+        message.report,
+        sender.tab?.id,
+        fromCurrentTab
+      ).catch(error => {
+
+        console.error(
+          "YouTube progress error:",
+          error
+        );
+
+      });
+
+
+      return;
+
+    }
+
+
+    if (
+      message.type === "ANSWER_QUIZ" &&
+      message.quizId &&
+      typeof message.chosenIndex === "number"
+    ) {
+
+      api<QuizResult>(
+        "POST",
+        `/youtube/quiz/${message.quizId}/answer`,
+        { chosenIndex: message.chosenIndex }
+      )
+        .then(result => {
+
+          sendResponse({ success: true, ...result });
+
+        })
+        .catch(error => {
+
+          console.error(
+            "Quiz answer error:",
+            error
+          );
+
+          sendResponse({ success: false });
+
+        });
+
+
+      return true;
+
+    }
+
+
+    if (message.type === "PANEL_FOCUS") {
+
+      panelFocusedUntil =
+        message.focused
+          ? Date.now() + 4000
+          : 0;
+
+      return;
+
+    }
+
+
+    if (
+      message.type === "GET_VIDEO_STATS" &&
+      message.videoId
+    ) {
+
+      api<{ watch: VideoWatch | null }>(
+        "GET",
+        `/youtube/watches/current?videoId=${encodeURIComponent(message.videoId)}`
+      )
+        .then(result => {
+
+          sendResponse(result.watch);
+
+        })
+        .catch(() => {
+
+          sendResponse(null);
+
+        });
+
+
+      return true;
+
+    }
+
+
+    // ==============================================
     // USER ACTIVITY
     // ==============================================
 
@@ -836,6 +1264,27 @@ chrome.runtime.onMessage.addListener(
 
         pageVisible =
           message.visible;
+
+      }
+
+
+      if (typeof message.focused === "boolean") {
+
+        pageFocused =
+          message.focused;
+
+      }
+
+
+      // The page lost focus: the learner may have left Chrome. Not
+      // activity, and not studying until focus returns.
+      if (message.focused === false) {
+
+        handleFocusLost(sender.tab?.id).catch(
+          logUnlessSignedOut("Focus loss")
+        );
+
+        return;
 
       }
 
@@ -1353,49 +1802,9 @@ async function handlePageContext(
   }
 
 
-  const session =
-    await getCurrentSession();
-
-
-  // ----------------------------------------------
-  // NO SESSION
-  // ----------------------------------------------
-
-  if (!session) {
-
-    await startSession(
-
-      context.website,
-
-      context.title,
-
-      context.url
-
-    );
-
-
-    return;
-
-  }
-
-
-  // ----------------------------------------------
-  // ENDED SESSION
-  // ----------------------------------------------
-
-  if (
-    !session.isActive
-  ) {
-
-    return;
-
-  }
-
-
-  // ----------------------------------------------
-  // ACTIVE SESSION
-  // ----------------------------------------------
-
+  // The backend starts a session if there is none, leaves an ended
+  // session ended, and otherwise follows the learner to the new page.
+  // One call, so a burst of page events can't create duplicate sessions.
   await updateSession(
 
     context.website,
@@ -1473,6 +1882,15 @@ async function handleUserActivity(
   }
 
 
+  // The page still sends heartbeats while another application is in
+  // front. That is not studying.
+  if (!await userIsInBrowser()) {
+
+    return;
+
+  }
+
+
   const result =
     await recordActivity(
 
@@ -1536,6 +1954,286 @@ async function handleUserActivity(
     result.session,
     result.nudgeState,
     submissionResult
+  );
+
+}
+
+
+// --------------------------------------------------
+// YOUTUBE PROGRESS HANDLER
+// --------------------------------------------------
+
+async function handleYouTubeProgress(
+  report: VideoReport,
+  tabId?: number,
+  fromCurrentTab = true
+): Promise<void> {
+
+  if (
+    !report.video.educational ||
+    !await getToken()
+  ) {
+
+    return;
+
+  }
+
+
+  const session =
+    await getCurrentSession();
+
+
+  if (!session?.isActive) {
+
+    return;
+
+  }
+
+
+  // Watching a lecture involves little mouse or keyboard input, so
+  // Chrome's idle check would call it idle. A playing educational video
+  // on screen, in the browser the learner is using, counts as studying.
+  if (
+    fromCurrentTab &&
+    report.playing &&
+    report.visible &&
+    currentContext &&
+    (report.focused || panelHasFocus()) &&
+    await isBrowserFocused()
+  ) {
+
+    await recordActivity(
+      "youtube",
+      currentContext.title,
+      currentContext.url,
+      "video_watch"
+    );
+
+  }
+
+
+  await postVideoProgress(
+    report.video,
+    report.delta,
+    report.positionS,
+    report.event,
+    tabId
+  );
+
+}
+
+
+async function postVideoProgress(
+  video: VideoInfo,
+  delta: VideoDelta,
+  positionS: number,
+  event: VideoReport["event"],
+  tabId?: number
+): Promise<void> {
+
+  const result =
+    await api<{
+      watch: VideoWatch | null;
+      nudge: { id: string; type: string; message: string } | null;
+    }>(
+      "POST",
+      "/youtube/progress",
+      {
+        video,
+        delta,
+        positionS,
+        event
+      }
+    );
+
+
+  if (
+    !result.nudge ||
+    tabId === undefined
+  ) {
+
+    return;
+
+  }
+
+
+  // A recall prompt comes with a question about what was just watched.
+  // Other notes (focus, skipping...) are shown as they are.
+  if (result.nudge.type === "ACTIVE_RECALL") {
+
+    offerQuiz(
+      tabId,
+      result.nudge.id,
+      result.nudge.message
+    ).catch(logUnlessSignedOut("Quiz"));
+
+    return;
+
+  }
+
+  showNote(
+    tabId,
+    result.nudge.id,
+    result.nudge.message
+  );
+
+}
+
+
+function showNote(
+  tabId: number,
+  nudgeId: string,
+  message: string,
+  loading = false
+): void {
+
+  // Also shown on the video page, in case the side panel is closed.
+  chrome.tabs.sendMessage(
+    tabId,
+    {
+      type: "SHOW_RECALL_PROMPT",
+      nudgeId,
+      message,
+      loading
+    }
+  ).catch(() => {
+
+    // The tab was closed or navigated away.
+
+  });
+
+}
+
+
+// Nudges whose question is already being prepared.
+const quizzesInFlight =
+  new Set<string>();
+
+
+// Shows the recall prompt straight away, then replaces it with a quiz
+// question about the last few minutes of the video when it is ready.
+async function offerQuiz(
+  tabId: number,
+  nudgeId: string,
+  message: string
+): Promise<void> {
+
+  if (quizzesInFlight.has(nudgeId)) {
+
+    return;
+
+  }
+
+  quizzesInFlight.add(nudgeId);
+
+  showNote(tabId, nudgeId, message, true);
+
+  try {
+
+    const where =
+      await chrome.tabs.sendMessage(
+        tabId,
+        { type: "GET_TRANSCRIPT_EXCERPT" }
+      ) as {
+        videoId: string;
+        positionS: number;
+        excerpt: { startS: number; endS: number; text: string } | null;
+      } | null;
+
+    if (!where) {
+
+      throw new Error("The video page did not answer.");
+
+    }
+
+    const { quiz } =
+      await api<{ quiz: QuizQuestion }>(
+        "POST",
+        "/youtube/quiz",
+        {
+          videoId: where.videoId,
+          nudgeId,
+          positionS: where.positionS,
+          excerpt: where.excerpt ?? undefined
+        }
+      );
+
+    chrome.tabs.sendMessage(
+      tabId,
+      {
+        type: "SHOW_QUIZ",
+        nudgeId,
+        message,
+        quiz
+      }
+    ).catch(() => {
+
+      // The tab was closed or navigated away.
+
+    });
+
+  } catch (error) {
+
+    // No question this time (rate limit, offline...): the plain recall
+    // prompt still stands.
+    logUnlessSignedOut("Quiz question")(error);
+
+    showNote(tabId, nudgeId, message);
+
+  } finally {
+
+    quizzesInFlight.delete(nudgeId);
+
+  }
+
+}
+
+
+// Records a tab or window change against the video that tab is playing.
+async function recordVideoEvent(
+  tabId: number,
+  counts: Partial<Pick<VideoDelta, "tabChanges" | "windowChanges">>,
+  event: "visibility" | "blur"
+): Promise<void> {
+
+  if (!await getToken()) {
+
+    return;
+
+  }
+
+
+  const video =
+    await chrome.tabs.sendMessage(
+      tabId,
+      { type: "GET_VIDEO_INFO" }
+    ).catch(() => null) as VideoInfo | null;
+
+
+  if (!video?.educational) {
+
+    return;
+
+  }
+
+
+  const session =
+    await getCurrentSession();
+
+
+  if (!session?.isActive) {
+
+    return;
+
+  }
+
+
+  await postVideoProgress(
+    video,
+    { ...emptyDelta(), ...counts },
+    0,
+    event,
+    tabId
   );
 
 }

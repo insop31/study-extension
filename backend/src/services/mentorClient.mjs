@@ -1,4 +1,4 @@
-// Talks to OpenRouter. The API key and system prompt never leave the server.
+// Talks to OpenRouter. The API key and system prompts never leave the server.
 
 const INSTRUCTIONS = [
   "You are a concise Socratic programming mentor.",
@@ -9,6 +9,8 @@ const INSTRUCTIONS = [
   "When currentCode is supplied, review it only to identify the next debugging or reasoning step.",
   "Do not provide a full solution or replacement implementation."
 ].join(" ");
+
+const REQUEST_TIMEOUT_MS = 40_000;
 
 export function extractText(data) {
   if (typeof data?.output_text === "string" && data.output_text.trim()) {
@@ -54,25 +56,39 @@ function friendlyError(status, body) {
   return message ? `OpenRouter error (${status}): ${message}` : "The mentor request failed.";
 }
 
-export function createMentorClient({ apiKey, model, fetchImpl = fetch }) {
-  return async function askMentor(learnerContext) {
+// Returns async ({ instructions, input, maxOutputTokens }) =>
+//   { success: true, text } | { success: false, error }
+//
+// Reasoning models think before they answer and that thinking counts against
+// max_output_tokens, so the budget is generous and the effort is kept low;
+// otherwise the answer can be cut off before it starts.
+export function createCompleter({ apiKey, model, fetchImpl = fetch }) {
+  return async function complete({ instructions, input, maxOutputTokens = 6000 }) {
     if (!apiKey) {
       return { success: false, error: "The server has no OPENROUTER_API_KEY configured." };
     }
 
-    const response = await fetchImpl("https://openrouter.ai/api/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        instructions: INSTRUCTIONS,
-        input: JSON.stringify(learnerContext),
-        max_output_tokens: 1200
-      })
-    });
+    let response;
+    try {
+      response = await fetchImpl("https://openrouter.ai/api/v1/responses", {
+        method: "POST",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model,
+          instructions,
+          input,
+          max_output_tokens: maxOutputTokens,
+          reasoning: { effort: "low" }
+        })
+      });
+    } catch (error) {
+      console.error("OpenRouter request failed:", error.message);
+      return { success: false, error: "The AI model did not respond in time. Please try again." };
+    }
 
     if (!response.ok) {
       const body = await response.text();
@@ -80,9 +96,25 @@ export function createMentorClient({ apiKey, model, fetchImpl = fetch }) {
       return { success: false, error: friendlyError(response.status, body) };
     }
 
-    const guidance = extractText(await response.json());
-    return guidance
-      ? { success: true, guidance }
-      : { success: false, error: "The mentor returned an empty response. Please try again." };
+    const text = extractText(await response.json());
+    return text
+      ? { success: true, text }
+      : { success: false, error: "The AI model returned no answer (it may have run out of tokens while thinking). Please try again." };
+  };
+}
+
+export function createMentorClient({ apiKey, model, fetchImpl = fetch }) {
+  const complete = createCompleter({ apiKey, model, fetchImpl });
+
+  return async function askMentor(learnerContext) {
+    const result = await complete({
+      instructions: INSTRUCTIONS,
+      input: JSON.stringify(learnerContext),
+      maxOutputTokens: 3000
+    });
+
+    return result.success
+      ? { success: true, guidance: result.text }
+      : { success: false, error: result.error };
   };
 }

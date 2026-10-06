@@ -13,6 +13,9 @@ import {
 } from "./auth.mjs";
 import { rateLimit } from "./rateLimit.mjs";
 import { createSessionService } from "./services/sessionService.mjs";
+import { createDashboardService } from "./services/dashboardService.mjs";
+import { createQuizService } from "./services/quizService.mjs";
+import { createYouTubeService } from "./services/youtubeService.mjs";
 
 const text = max => z.string().max(max);
 
@@ -54,11 +57,64 @@ const googleSchema = z.object({
 const nudgeSchema = z.object({
   type: z.enum([
     "STUCK", "THINKING_PROMPT", "ACTIVE_RECALL", "BREAK_REMINDER",
-    "AI_MENTOR", "AI_MENTOR_ERROR"
+    "AI_MENTOR", "AI_MENTOR_ERROR",
+    "FOCUS_REMINDER", "SKIP_REMINDER", "CONFUSION_CHECK"
   ]),
   message: text(4000),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   problemSlug: text(200).optional()
+});
+
+const seconds = z.number().min(0).max(600);
+const count = z.number().int().min(0).max(100);
+
+const videoProgressSchema = z.object({
+  video: z.object({
+    videoId: z.string().regex(/^[\w-]{6,20}$/),
+    title: text(500),
+    channel: text(200).optional(),
+    category: text(100).optional(),
+    durationS: z.number().int().min(0).max(172800),
+    score: z.number().int().min(-50).max(50),
+    topics: z.array(text(100)).max(10)
+  }),
+  delta: z.object({
+    watchedS: seconds,
+    playingS: seconds,
+    activeS: seconds,
+    pausedS: seconds,
+    pauseCount: count,
+    tabChanges: count,
+    windowChanges: count,
+    skipCount: count,
+    skippedS: z.number().min(0).max(172800),
+    rewindCount: count,
+    rewoundS: z.number().min(0).max(172800)
+  }),
+  positionS: z.number().min(0).max(172800),
+  event: z.enum(["pause", "playing", "seek", "ended", "visibility", "blur", "periodic"])
+});
+
+const quizRequestSchema = z.object({
+  videoId: z.string().regex(/^[\w-]{6,20}$/),
+  nudgeId: z.uuid().optional(),
+  positionS: z.number().min(0).max(172800),
+  excerpt: z.object({
+    startS: z.number().min(0).max(172800),
+    endS: z.number().min(0).max(172800),
+    text: text(8000)
+  }).optional()
+});
+
+const quizAnswerSchema = z.object({
+  chosenIndex: z.number().int().min(0).max(5)
+});
+
+const preferencesSchema = z.object({
+  timezone: z.string().min(1).max(64).optional(),
+  dailyGoalMinutes: z.number().int().min(5).max(720).optional()
+}).refine(v => v.timezone !== undefined || v.dailyGoalMinutes !== undefined, {
+  message: "Nothing to update."
 });
 
 const mentorSchema = z.object({
@@ -94,10 +150,13 @@ function toNudge(row) {
   };
 }
 
-export function createApp({ pool, askMentor, verifyGoogleToken = null, now = () => new Date(), authAttemptsPerMinute = 10 }) {
+export function createApp({ pool, askMentor, generateQuiz = null, completeText = null, verifyGoogleToken = null, now = () => new Date(), authAttemptsPerMinute = 10, quizRequestsPerMinute = 6, coachRequestsPerHour = 6 }) {
   const app = express();
   const sessions = createSessionService(pool, now);
   const auth = requireAuth(pool, now);
+  const youtube = createYouTubeService(pool, now);
+  const quizzes = createQuizService(pool, generateQuiz, now);
+  const dashboard = createDashboardService(pool, { now, complete: completeText });
 
   app.use(cors());
   app.use(express.json({ limit: "64kb" }));
@@ -318,6 +377,90 @@ export function createApp({ pool, askMentor, verifyGoogleToken = null, now = () 
     res.json({ success: true });
   });
 
+  // ---- YouTube ----------------------------------------------------------
+  app.post("/api/youtube/progress", auth, async (req, res) => {
+    const body = parse(videoProgressSchema, req.body, res);
+    if (!body) return;
+    res.json(await youtube.recordProgress(req.userId, body));
+  });
+
+  app.get("/api/youtube/watches/current", auth, async (req, res) => {
+    const videoId = typeof req.query.videoId === "string" ? req.query.videoId : "";
+    const watch = videoId ? await youtube.currentWatch(req.userId, videoId) : null;
+    res.json({
+      watch: watch ? { ...watch, quiz: await quizzes.summaryForVideo(req.userId, videoId) } : null
+    });
+  });
+
+  // Asks the AI for a question about what the learner just watched. The
+  // correct answer is withheld until they answer.
+  app.post(
+    "/api/youtube/quiz",
+    auth,
+    rateLimit({ windowMs: 60_000, max: quizRequestsPerMinute, key: req => req.userId }),
+    async (req, res) => {
+      const body = parse(quizRequestSchema, req.body, res);
+      if (!body) return;
+      const outcome = await quizzes.create(req.userId, body);
+      if (outcome.error) {
+        return res.status(outcome.status).json({ success: false, error: outcome.error });
+      }
+      res.status(201).json({ success: true, quiz: outcome.quiz });
+    }
+  );
+
+  app.post("/api/youtube/quiz/:id/answer", auth, async (req, res) => {
+    if (!z.uuid().safeParse(req.params.id).success) {
+      return res.status(400).json({ success: false, error: "Invalid question id." });
+    }
+    const body = parse(quizAnswerSchema, req.body, res);
+    if (!body) return;
+    const outcome = await quizzes.answer(req.userId, req.params.id, body.chosenIndex);
+    if (outcome.error) {
+      return res.status(outcome.status).json({ success: false, error: outcome.error });
+    }
+    res.json({ success: true, ...outcome.result });
+  });
+
+  app.get("/api/youtube/watches", auth, async (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    res.json({ watches: await youtube.list(req.userId, limit) });
+  });
+
+  // ---- learning dashboard ----------------------------------------------
+  app.get("/api/me/preferences", auth, async (req, res) => {
+    res.json({ preferences: await dashboard.preferences(req.userId) });
+  });
+
+  app.put("/api/me/preferences", auth, async (req, res) => {
+    const body = parse(preferencesSchema, req.body, res);
+    if (!body) return;
+    const outcome = await dashboard.updatePreferences(req.userId, body);
+    if (outcome.error) return res.status(400).json({ success: false, error: outcome.error });
+    res.json(outcome);
+  });
+
+  app.get("/api/dashboard", auth, async (req, res) => {
+    res.json(await dashboard.build(req.userId));
+  });
+
+  app.get("/api/dashboard/coach", auth, async (req, res) => {
+    res.json({ report: await dashboard.latestCoachReport(req.userId) });
+  });
+
+  app.post(
+    "/api/dashboard/coach",
+    auth,
+    rateLimit({ windowMs: 60 * 60_000, max: coachRequestsPerHour, key: req => req.userId }),
+    async (req, res) => {
+      const outcome = await dashboard.writeCoachReport(req.userId);
+      if (outcome.error) {
+        return res.status(outcome.status).json({ success: false, error: outcome.error });
+      }
+      res.status(201).json({ success: true, report: outcome.report });
+    }
+  );
+
   // ---- AI mentor --------------------------------------------------------
   app.post(
     "/api/mentor",
@@ -394,8 +537,39 @@ export function createApp({ pool, askMentor, verifyGoogleToken = null, now = () 
       [req.userId]
     );
 
+    const { rows: [videoTotals] } = await pool.query(
+      `SELECT count(DISTINCT video_id)::int AS videos,
+              COALESCE(sum(watch_time_s), 0) AS watched_s
+       FROM video_watches
+       WHERE user_id = $1 AND last_seen >= $2::timestamptz - make_interval(days => $3)`,
+      [req.userId, now(), days]
+    );
+
+    const { rows: videoTopics } = await pool.query(
+      `SELECT t.topic, sum(w.watch_time_s) AS watched_s
+       FROM video_watches w
+       CROSS JOIN LATERAL unnest(w.topics) AS t(topic)
+       WHERE w.user_id = $1 AND w.last_seen >= $2::timestamptz - make_interval(days => $3)
+       GROUP BY t.topic ORDER BY watched_s DESC, t.topic LIMIT 10`,
+      [req.userId, now(), days]
+    );
+
+    const { rows: [quizTotals] } = await pool.query(
+      `SELECT count(*) FILTER (WHERE answered_at IS NOT NULL)::int AS answered,
+              count(*) FILTER (WHERE correct)::int AS correct
+       FROM video_quizzes
+       WHERE user_id = $1 AND created_at >= $2::timestamptz - make_interval(days => $3)`,
+      [req.userId, now(), days]
+    );
+
     res.json({
       days,
+      videos: {
+        quizzes: quizTotals,
+        count: videoTotals.videos,
+        watchedMs: Math.round(Number(videoTotals.watched_s) * 1000),
+        topics: videoTopics.map(t => ({ topic: t.topic, watchedMs: Math.round(Number(t.watched_s) * 1000) }))
+      },
       totalActiveMs: perDay.reduce((sum, r) => sum + Number(r.active_ms), 0),
       perDay: perDay.map(r => ({ day: r.day, activeMs: Number(r.active_ms) })),
       problemsSolved: solved.n,

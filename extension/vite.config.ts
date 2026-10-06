@@ -9,5 +9,14 @@ export default defineConfig({
     crx({
       manifest
     })
-  ]
+  ],
+  build: {
+    rollupOptions: {
+      // The learning dashboard is a full page opened in its own tab, so it
+      // is not referenced by the manifest and must be listed here.
+      input: {
+        dashboard: "src/dashboard/index.html"
+      }
+    }
+  }
 });
