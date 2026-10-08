@@ -93,17 +93,18 @@ const STYLES = `
     box-sizing: border-box;
     padding: 16px;
     border-radius: 14px;
-    border-left: 4px solid #6366f1;
-    background: #ffffff;
-    color: #172033;
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    border: 1px solid #e4dac7;
+    border-left: 4px solid #6f9c89;
+    background: #fbf8f1;
+    color: #3b4742;
+    font: 14px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
   }
   .label {
     margin-bottom: 6px;
     font-size: 12px;
     font-weight: 700;
-    color: #6366f1;
+    color: #2f5e4f;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -117,7 +118,7 @@ const STYLES = `
     padding: 9px 10px;
     border: 1px solid transparent;
     border-radius: 8px;
-    background: #6366f1;
+    background: #bd533a;
     color: #ffffff;
     font: inherit;
     font-weight: 600;
@@ -126,16 +127,16 @@ const STYLES = `
   }
   button:disabled { cursor: default; opacity: 0.85; }
   button.option {
-    background: #f5f7fb;
-    color: #172033;
-    border-color: #d6dbe6;
+    background: #f3eddf;
+    color: #3b4742;
+    border-color: #e4dac7;
     font-weight: 500;
     text-align: left;
   }
-  button.option:hover:not(:disabled) { border-color: #6366f1; }
+  button.option:hover:not(:disabled) { border-color: #6f9c89; }
   button.option.right { background: #dcfce7; border-color: #16a34a; }
   button.option.wrong { background: #fee2e2; border-color: #dc2626; }
-  button.ghost { background: transparent; color: #6366f1; border-color: #c7c9f5; margin-top: 8px; }
+  button.ghost { background: transparent; color: #2f5e4f; border-color: #d4c8b0; margin-top: 8px; }
   .verdict { font-weight: 700; margin: 12px 0 6px; }
   .verdict.right { color: #15803d; }
   .verdict.wrong { color: #b91c1c; }

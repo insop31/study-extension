@@ -1,5 +1,6 @@
 import { withTx } from "../db.mjs";
 import { VIDEO_NUDGE_TYPES, decideVideoNudge } from "./videoMentor.mjs";
+import { focusNote, recallNote, videoThresholds } from "../dashboard/personalize.mjs";
 
 export function toWatch(row) {
   if (!row) return null;
@@ -36,11 +37,20 @@ export function toWatch(row) {
   };
 }
 
-export function createYouTubeService(pool, now = () => new Date()) {
+export function createYouTubeService(pool, now = () => new Date(), profiles = null) {
 
   // Adds one report's deltas to the learner's running totals for the video
   // and, if it is a good moment, creates a recall prompt.
   async function recordProgress(userId, report) {
+    // How often to prompt, and what personal note to add, for this learner.
+    const profile = profiles
+      ? await profiles.get(userId, { topics: report.video.topics })
+      : null;
+    const thresholds = profile ? videoThresholds(profile) : {};
+    const notes = profile
+      ? { recall: recallNote(profile, report.video.topics), focus: focusNote(profile) }
+      : {};
+
     return withTx(pool, async client => {
       const { rows: [session] } = await client.query(
         `SELECT id, user_state FROM study_sessions
@@ -109,7 +119,9 @@ export function createYouTubeService(pool, now = () => new Date()) {
         event: report.event,
         lastNudgeAt: last.any_at,
         lastRecallAt: last.recall_at,
-        now: at
+        now: at,
+        thresholds,
+        notes
       });
 
       let nudge = null;

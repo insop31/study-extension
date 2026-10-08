@@ -1,0 +1,160 @@
+/* Shared "quiet forest" theme for the side panel and the dashboard:
+   cream paper, sage greens, a coral call to action, typewriter type. */
+
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+@import "@fontsource/ibm-plex-mono/700.css";
+
+:root {
+  color-scheme: light;
+
+  --font: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* paper and surfaces */
+  --paper: #f4efe3;
+  --card: #fbf8f1;
+  --card-2: #f3eddf;
+  --line: #e4dac7;
+  --line-strong: #d4c8b0;
+
+  /* sage greens */
+  --sage-50: #eef4ef;
+  --sage-100: #dce9e0;
+  --sage-200: #c7dacd;
+  --sage-300: #a7c4b5;
+  --sage-500: #6f9c89;
+  --forest: #2f5e4f;
+  --forest-ink: #2f4a40;
+
+  /* text (all >= 4.5:1 on --card) */
+  --ink: #3b4742;
+  --ink-2: #67736d;
+
+  /* call to action: white text on it is 4.7:1 */
+  --coral: #bd533a;
+  --coral-hover: #a9472f;
+  --coral-soft: #f6d9cf;
+
+  /* chart series, validated for colour-blind separation on --card */
+  --series-1: #0f7fa0;   /* LeetCode */
+  --series-2: #c97d1e;   /* YouTube */
+  --series-3: #6f9c89;   /* other */
+
+  /* single-hue green ramp for activity */
+  --heat-0: #ece5d4;
+  --heat-1: #cfe0d2;
+  --heat-2: #9fc4ae;
+  --heat-3: #6aa189;
+  --heat-4: #3f7a63;
+
+  /* status (always shown with an icon and a word) */
+  --good: #3f8f52;
+  --warning: #e0a526;
+  --critical: #c64545;
+
+  --radius: 14px;
+  --shadow: 0 1px 0 rgba(63, 74, 66, 0.04), 0 2px 8px rgba(63, 74, 66, 0.06);
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+}
+
+button,
+input,
+textarea {
+  font-family: var(--font);
+}
+
+/* ---------------- shared pieces ---------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.btn-primary {
+  background: var(--coral);
+  color: #ffffff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--coral-hover);
+}
+
+.btn-sage {
+  background: var(--sage-200);
+  color: var(--forest-ink);
+  border-color: var(--sage-300);
+}
+
+.btn-sage:hover:not(:disabled) {
+  background: var(--sage-300);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--forest);
+  border-color: var(--line-strong);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--card-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--sage-100);
+  color: var(--forest-ink);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.chip.warm {
+  background: #f5e6cf;
+  color: #6b4a16;
+}
+
+.chip.cool {
+  background: #d8ebf1;
+  color: #0e5068;
+}
+
+:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}
+
+/* Illustrations scale with their box. */
+.scene {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

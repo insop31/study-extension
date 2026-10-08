@@ -30,6 +30,32 @@ import type {
   DashboardTopic
 } from "./types";
 
+import type {
+  AuthUser
+} from "../core/types";
+
+import {
+  BunnyAvatar,
+  ForestScene,
+  PineMark,
+  Sprout
+} from "../ui/illustrations";
+
+import { greeting } from "../ui/greeting";
+
+import * as Icons from "../ui/icons";
+
+
+// Sections of the page, for the sidebar.
+const NAV = [
+  { id: "overview", label: "Overview", icon: Icons.Home },
+  { id: "week", label: "This week", icon: Icons.Week },
+  { id: "topics", label: "Topics", icon: Icons.Topics },
+  { id: "activity", label: "Activity", icon: Icons.Activity },
+  { id: "recent", label: "Recent", icon: Icons.Recent },
+  { id: "plan", label: "Study plan", icon: Icons.Plan }
+] as const;
+
 
 const REFRESH_MS =
   60_000;
@@ -253,7 +279,7 @@ function CoachCard() {
 
 
   return (
-    <section className="card coach-card">
+    <section className="card coach-card" id="plan">
 
       <div className="card-header">
 
@@ -265,7 +291,7 @@ function CoachCard() {
         </div>
 
         <button
-          className="primary-button"
+          className="btn btn-primary"
           onClick={write}
           disabled={busy}
         >
@@ -319,6 +345,25 @@ export default function DashboardPage() {
 
   const [loading, setLoading] =
     useState(false);
+
+  const [user, setUser] =
+    useState<AuthUser | null>(null);
+
+  const [activeSection, setActiveSection] =
+    useState<string>("overview");
+
+
+  useEffect(() => {
+
+    api<{ user: AuthUser }>("GET", "/auth/me")
+      .then(result => setUser(result.user))
+      .catch(() => {
+
+        // The greeting falls back to a generic one.
+
+      });
+
+  }, []);
 
 
   const load = useCallback(async () => {
@@ -423,7 +468,7 @@ export default function DashboardPage() {
           <p>
             Sign in from the Study Mentor side panel to see your dashboard, then reload this page.
           </p>
-          <button className="primary-button" onClick={() => void load()}>
+          <button className="btn btn-primary" onClick={() => void load()}>
             I've signed in, reload
           </button>
         </section>
@@ -453,26 +498,64 @@ export default function DashboardPage() {
   const goalMs =
     data.dailyGoalMinutes * 60000;
 
+  const firstName =
+    user?.name?.trim().split(/\s+/)[0] ||
+    user?.email.split("@")[0] ||
+    "learner";
+
+  const goalShare =
+    Math.min(1, s.todayMs / Math.max(goalMs, 1));
+
   return (
-    <main className="page">
+    <div className="shell">
 
       {/* ------------------------------------------ */}
-      {/* HEADER */}
+      {/* SIDEBAR */}
       {/* ------------------------------------------ */}
 
-      <header className="page-header">
+      <aside className="sidebar">
 
-        <div>
-          <h1>Learning Dashboard</h1>
-          <p className="muted">
-            Your study across LeetCode and YouTube · updated {timeAgo(data.generatedAt)}
-          </p>
+        <div className="brand">
+          <PineMark size={24} />
+          Study Mentor
         </div>
 
-        <div className="header-actions">
+        <nav aria-label="Dashboard sections">
+          {NAV.map(item => (
+            <a
+              key={item.id}
+              href={`#${item.id}`}
+              className={activeSection === item.id ? "nav-item active" : "nav-item"}
+              aria-current={activeSection === item.id ? "true" : undefined}
+              onClick={() => setActiveSection(item.id)}
+            >
+              <item.icon />
+              {item.label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="goal-widget">
+
+          <span className="goal-title">Daily goal</span>
+
+          <span className="goal-numbers">
+            {formatDuration(s.todayMs)} / {formatDuration(goalMs)}
+          </span>
+
+          <span
+            className="goal-meter"
+            role="meter"
+            aria-valuemin={0}
+            aria-valuemax={data.dailyGoalMinutes}
+            aria-valuenow={Math.round(s.todayMs / 60000)}
+            aria-label="Study time today against your daily goal"
+          >
+            <span style={{ width: `${goalShare * 100}%` }} />
+          </span>
 
           <label className="goal-input">
-            Daily goal
+            Goal
             <input
               type="number"
               min={5}
@@ -487,22 +570,52 @@ export default function DashboardPage() {
           </label>
 
           {goalDraft !== String(data.dailyGoalMinutes) && (
-            <button className="text-button" onClick={() => void saveGoal()}>
-              Save
+            <button className="btn btn-primary goal-save" onClick={() => void saveGoal()}>
+              Save goal
             </button>
           )}
 
-          <button
-            className="secondary-button"
-            onClick={() => void load()}
-            disabled={loading}
-          >
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
+          <div className="goal-art" aria-hidden="true">
+            <BunnyAvatar size={46} />
+            <Sprout size={34} />
+          </div>
 
         </div>
 
+      </aside>
+
+
+      <main className="page" id="overview">
+
+      {/* ------------------------------------------ */}
+      {/* HEADER */}
+      {/* ------------------------------------------ */}
+
+      <header className="page-header">
+
+        <div>
+          <h1>{greeting()}, {firstName}.</h1>
+          <p className="muted">
+            Your study across LeetCode and YouTube · updated {timeAgo(data.generatedAt)}
+          </p>
+        </div>
+
+        <button
+          className="btn btn-ghost"
+          onClick={() => void load()}
+          disabled={loading}
+        >
+          <Icons.Refresh />
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+
       </header>
+
+
+      <section className="hero-banner" aria-label="Encouragement">
+        <ForestScene wide />
+        <p className="hero-quote">Little by little, every day.</p>
+      </section>
 
 
       {error && (
@@ -564,7 +677,7 @@ export default function DashboardPage() {
       {/* WEEK + RECOMMENDATIONS */}
       {/* ------------------------------------------ */}
 
-      <div className="grid two">
+      <div className="grid two" id="week">
 
         <section className="card">
 
@@ -620,7 +733,7 @@ export default function DashboardPage() {
       {/* TOPICS */}
       {/* ------------------------------------------ */}
 
-      <section className="card">
+      <section className="card" id="topics">
 
         <div className="card-header">
           <div>
@@ -650,7 +763,7 @@ export default function DashboardPage() {
       {/* TRENDS */}
       {/* ------------------------------------------ */}
 
-      <div className="grid three">
+      <div className="grid three" id="activity">
 
         <section className="card">
           <h2>Daily activity</h2>
@@ -679,7 +792,7 @@ export default function DashboardPage() {
       {/* RECENT WORK */}
       {/* ------------------------------------------ */}
 
-      <div className="grid two">
+      <div className="grid two" id="recent">
 
         <section className="card">
 
@@ -770,7 +883,9 @@ export default function DashboardPage() {
         Times are in {data.timezone}. Study time counts only while you are active on a study page.
       </footer>
 
-    </main>
+      </main>
+
+    </div>
   );
 
 }

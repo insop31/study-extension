@@ -4,6 +4,29 @@ import type {
 } from "./types";
 
 
+// What the backend knows about this learner for the current problem
+// (see backend/src/dashboard/personalize.mjs, leetCodePersonal).
+export interface PersonalNudgeData {
+
+  // Their usual active time to solve a problem of this difficulty.
+  expectedSolveMs: number | null;
+
+  // Active time spent on this problem so far.
+  problemActiveMs: number | null;
+
+  topic: string | null;
+
+  topicStatus: "strong" | "moderate" | "weak" | "new" | null;
+
+  // A problem in the same topic they have already solved.
+  solvedSimilar: string | null;
+
+  // Attempts they usually need before an accepted submission.
+  attemptsToSolve: number | null;
+
+}
+
+
 export interface NudgeContext {
 
   website: string;
@@ -17,6 +40,8 @@ export interface NudgeContext {
   // Unsuccessful submissions on the current problem.
   failedAttempts: number;
 
+  personal?: PersonalNudgeData | null;
+
 }
 
 
@@ -27,11 +52,58 @@ export interface NudgeContext {
 export const NUDGE_COOLDOWN =
   15 * 60 * 1000;
 
-const STUCK_MINUTES =
-  10;
+// Defaults for a learner with no history yet.
+const DEFAULT_THINKING_MS =
+  10 * 60 * 1000;
 
-const STUCK_ATTEMPTS =
+const DEFAULT_STUCK_ATTEMPTS =
   3;
+
+const MIN_THINKING_MS =
+  5 * 60 * 1000;
+
+const MAX_THINKING_MS =
+  30 * 60 * 1000;
+
+
+// When to step in: a little past this learner's usual solving time.
+export function thinkingThresholdMs(
+  personal?: PersonalNudgeData | null
+): number {
+
+  if (!personal?.expectedSolveMs) {
+
+    return DEFAULT_THINKING_MS;
+
+  }
+
+  return Math.min(
+    MAX_THINKING_MS,
+    Math.max(MIN_THINKING_MS, Math.round(personal.expectedSolveMs * 1.25))
+  );
+
+}
+
+
+// Someone who usually needs 4 tries is not stuck after 3.
+export function stuckAttempts(
+  personal?: PersonalNudgeData | null
+): number {
+
+  return personal?.attemptsToSolve
+    ? Math.max(DEFAULT_STUCK_ATTEMPTS, personal.attemptsToSolve + 1)
+    : DEFAULT_STUCK_ATTEMPTS;
+
+}
+
+
+function problemName(
+  pageTitle: string
+): string {
+
+  return pageTitle.replace(/ - LeetCode$/, "");
+
+}
 
 
 // --------------------------------------------------
@@ -54,12 +126,6 @@ export function evaluateNudge(
   }
 
 
-  const activeMinutes =
-    Math.floor(
-      context.activeTime / 60000
-    );
-
-
   // ------------------------------------------------
   // LEETCODE
   // ------------------------------------------------
@@ -69,12 +135,48 @@ export function evaluateNudge(
     "leetcode"
   ) {
 
-    // Active + enough time + repeated failures
+    const personal =
+      context.personal ?? null;
+
+    // Time on this problem when known, otherwise on the session.
+    const timeSpent =
+      personal?.problemActiveMs ?? context.activeTime;
+
+    const threshold =
+      thinkingThresholdMs(personal);
+
+    const name =
+      problemName(context.pageTitle);
+
+    const topic =
+      personal?.topic;
+
+
+    // Active + enough time + more failures than usual
     // (cooldown is checked by the caller).
     if (
-      activeMinutes >= STUCK_MINUTES &&
-      context.failedAttempts >= STUCK_ATTEMPTS
+      timeSpent >= threshold &&
+      context.failedAttempts >= stuckAttempts(personal)
     ) {
+
+      const parts = [
+        `You've had ${context.failedAttempts} unsuccessful submissions on ${name}.`,
+        "Instead of tweaking the same approach, write down what the failing cases have in common."
+      ];
+
+      if (personal?.solvedSimilar && topic) {
+
+        parts.push(`You solved "${problemName(personal.solvedSimilar)}", which uses the same ${topic} idea: what did you keep track of there?`);
+
+      } else if (personal?.topicStatus === "weak" && topic) {
+
+        parts.push(`${topic} is still one of your weaker areas, so it's fine to review a short explanation of the core technique before trying again.`);
+
+      } else {
+
+        parts.push("Then think about what information you need to look up quickly.");
+
+      }
 
       return {
 
@@ -88,7 +190,7 @@ export function evaluateNudge(
           "high",
 
         message:
-          `You've had ${context.failedAttempts} unsuccessful submissions on ${context.pageTitle}. Instead of tweaking the same approach, write down what each failing case has in common, then think about what information you need to look up quickly.`,
+          parts.join(" "),
 
         createdAt:
           Date.now()
@@ -97,9 +199,31 @@ export function evaluateNudge(
 
     }
 
+
     if (
-      activeMinutes >= 10
+      timeSpent >= threshold
     ) {
+
+      const minutesSpent =
+        Math.round(timeSpent / 60000);
+
+      const opening =
+        personal?.expectedSolveMs
+          ? `You usually solve problems like this in about ${Math.round(personal.expectedSolveMs / 60000)} min and you're ${minutesSpent} min into ${name}.`
+          : `You've been working on ${name} for a while.`;
+
+      let prompt =
+        "Before looking at the solution, explain your current approach in your own words. What information do you need to keep track of while scanning the input?";
+
+      if (personal?.topicStatus === "strong" && topic) {
+
+        prompt = `You're strong in ${topic}. Which ${topic} technique you already know fits this problem, and what is stopping it from working?`;
+
+      } else if (personal?.topicStatus === "weak" && topic) {
+
+        prompt = `${topic} is still a weaker area for you: write down a brute-force approach first, then look for the work it repeats.`;
+
+      }
 
       return {
 
@@ -113,7 +237,7 @@ export function evaluateNudge(
           "medium",
 
         message:
-          `You've been working on ${context.pageTitle} for a while. Before looking at the solution, explain your current approach in your own words. What information do you need to keep track of while scanning the input?`,
+          `${opening} ${prompt}`,
 
         createdAt:
           Date.now()

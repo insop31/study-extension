@@ -1,4 +1,5 @@
 import { withTx } from "../db.mjs";
+import { leetCodePersonal } from "../dashboard/personalize.mjs";
 
 // Gaps longer than this between two activities are not counted as study time.
 export const IDLE_THRESHOLD_MS = 60 * 1000;
@@ -26,7 +27,7 @@ export function toSession(row) {
   };
 }
 
-export function createSessionService(pool, now = () => new Date()) {
+export function createSessionService(pool, now = () => new Date(), profiles = null) {
 
   async function currentRow(client, userId, { lock = false } = {}) {
     const { rows } = await client.query(
@@ -164,7 +165,7 @@ export function createSessionService(pool, now = () => new Date()) {
     return rows[0].id;
   }
 
-  async function nudgeState(client, userId, sessionId, website, problemSlug) {
+  async function nudgeState(client, userId, sessionId, website, problemSlug, input = {}) {
     const { rows: [last] } = await client.query(
       `SELECT max("timestamp") AS at FROM mentor_interactions
        WHERE user_id = $1 AND nudge_type = ANY($2)`,
@@ -195,17 +196,41 @@ export function createSessionService(pool, now = () => new Date()) {
       failedAttempts = count.n;
     }
 
+    // This learner's usual pace and their record in the problem's topic,
+    // so nudges come at the right time for them and say something specific.
+    let personal = null;
+    if (profiles && website === "leetcode" && problemSlug) {
+      const profile = await profiles.get(userId, {
+        topics: input.topics,
+        difficulty: input.difficulty,
+        problemSlug
+      });
+      personal = leetCodePersonal(profile, input.difficulty);
+
+      // Time on this problem changes every few seconds; read it fresh.
+      const { rows: [progress] } = await client.query(
+        `SELECT pp.active_ms FROM problem_progress pp
+         JOIN problems p ON p.id = pp.problem_id
+         WHERE pp.user_id = $1 AND p.platform = $2 AND p.slug = $3`,
+        [userId, website, problemSlug]
+      );
+      personal.problemActiveMs = progress ? Number(progress.active_ms) : 0;
+    }
+
     return {
       lastNudgeAt: last.at ? last.at.getTime() : null,
       lastProactiveAt: proactive ? proactive.timestamp.getTime() : null,
       lastProactiveType: proactive ? proactive.nudge_type : null,
-      failedAttempts
+      failedAttempts,
+      personal
     };
   }
 
   // Records one activity event. Returns null when there is no session.
   async function recordActivity(userId, input) {
-    return withTx(pool, async client => {
+    let solvedNow = false;
+
+    const result = await withTx(pool, async client => {
       const row = await currentRow(client, userId, { lock: true });
       if (!row) return null;
 
@@ -272,6 +297,8 @@ export function createSessionService(pool, now = () => new Date()) {
       }
 
       // A final verdict (not the bare "submitted" click) counts as an attempt.
+      solvedNow = verdict === "accepted";
+
       if (problemId && verdict) {
         const { rows: [count] } = await client.query(
           `SELECT count(*)::int AS n FROM problem_attempts
@@ -292,10 +319,16 @@ export function createSessionService(pool, now = () => new Date()) {
       return {
         session: toSession(session),
         nudgeState: await nudgeState(
-          client, userId, row.id, input.website, input.problemSlug
+          client, userId, row.id, input.website, input.problemSlug, input
         )
       };
     });
+
+    // A solve changes the learner's picture. Refresh only now that it is
+    // committed: a reload inside the transaction would cache the old state.
+    if (solvedNow) profiles?.invalidate(userId);
+
+    return result;
   }
 
   async function setState(userId, state) {

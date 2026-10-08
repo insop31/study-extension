@@ -13,6 +13,9 @@ import { createPool } from "../src/db.mjs";
 // Uses TEST_DATABASE_URL if set, otherwise boots a throwaway embedded Postgres.
 // A random port avoids clashing with a leftover instance from an interrupted run.
 const pgPort = 55000 + Math.floor(Math.random() * 5000);
+// What the AI stubs were last asked, to check personalisation reaches them.
+let lastMentorCall = null;
+let lastQuizCall = null;
 let embedded;
 let dataDir;
 let pool;
@@ -66,7 +69,8 @@ before(async () => {
       const [, sub, email, verified] = idToken.split("|");
       return { sub, email, emailVerified: verified === "true", name: "Gina Google", nonce };
     },
-    generateQuiz: async ({ video, excerpt, positionS }) => {
+    generateQuiz: async ({ video, excerpt, positionS, personalization }) => {
+      lastQuizCall = { video, personalization };
       if (excerpt?.text === "FAIL") return { success: false, error: "The AI model is rate-limited right now." };
       return {
         success: true,
@@ -88,7 +92,10 @@ before(async () => {
       text: `Plan for ${JSON.parse(input).summary.problemsSolved} solved problems.
 - Practise Graphs`
     }),
-    askMentor: async ctx => ({ success: true, guidance: `hint for ${ctx.slug}` })
+    askMentor: async (ctx, options) => {
+      lastMentorCall = { ctx, options };
+      return { success: true, guidance: `hint for ${ctx.slug}` };
+    }
   });
   await new Promise(resolve => { server = app.listen(0, "127.0.0.1", resolve); });
   base = `http://127.0.0.1:${server.address().port}`;
@@ -102,6 +109,11 @@ after(async () => {
   // Stopping also deletes the data folder, which Windows may still hold
   // locked; that must not fail the run.
   await embedded?.stop().catch(() => {});
+
+  // On Windows the embedded server's child processes sometimes linger after
+  // stop() and hold their output pipes open, which keeps this test process
+  // alive. Results are already reported by now, so exit if that happens.
+  setTimeout(() => process.exit(), 3000).unref();
   // Windows can keep the folder locked for a moment after Postgres exits;
   // a leftover temp folder must not fail the run.
   if (dataDir) {
@@ -739,6 +751,68 @@ describe("study mentor API", () => {
       assert.equal(body.summary.problemsSolved, 0);
       assert.equal(body.topics.length, 0);
       assert.equal((await api("GET", "/api/dashboard/coach", { token: other })).body.report, null);
+    });
+  });
+
+  describe("personalised mentor", () => {
+    let pt;
+    const page = { website: "leetcode", title: "Two Sum - LeetCode", url: "https://leetcode.com/problems/two-sum/" };
+    const act = extra => api("POST", "/api/sessions/current/activity", {
+      token: pt,
+      body: {
+        ...page, activityType: "keydown", problemSlug: "two-sum", difficulty: "Easy",
+        topics: ["Array", "Hash Table"], programmingLanguage: "C++", ...extra
+      }
+    });
+
+    before(async () => {
+      pt = (await signup("personal@example.com")).body.token;
+      await api("POST", "/api/sessions", { token: pt, body: page });
+      await act();
+      advance(30_000);
+      await act({ activityType: "submission", submissionResult: "accepted" });
+    });
+
+    it("gives the AI mentor this learner's history and a matching style", async () => {
+      await api("POST", "/api/mentor", {
+        token: pt,
+        body: { slug: "contains-duplicate", problem: "Contains Duplicate", difficulty: "Easy", topics: ["Array"] }
+      });
+
+      const { ctx, options } = lastMentorCall;
+      assert.equal(ctx.learner.level, "beginner");
+      assert.equal(ctx.learner.problemsSolved, 1);
+      assert.equal(ctx.learner.preferredLanguage, "C++");
+      assert.deepEqual(ctx.learner.focusTopics[0].solvedExamples, ["Two Sum - LeetCode"]);
+      assert.ok(options.style.some(line => /beginner/.test(line)));
+      assert.ok(options.style.some(line => /Two Sum/.test(line)));
+      assert.ok(options.style.some(line => /C\+\+/.test(line)));
+    });
+
+    it("tells the LeetCode nudge engine about time on this problem", async () => {
+      advance(20_000);
+      const res = await act();
+      assert.equal(res.body.nudgeState.personal.topic, "Arrays");
+      assert.equal(res.body.nudgeState.personal.problemActiveMs, 50_000);
+    });
+
+    it("tailors quiz questions and never repeats one on the same video", async () => {
+      const video = {
+        videoId: "personalVid", title: "Arrays explained", category: "Education",
+        durationS: 600, score: 9, topics: ["Arrays"]
+      };
+      const delta = {
+        watchedS: 60, playingS: 60, activeS: 60, pausedS: 0, pauseCount: 0, tabChanges: 0,
+        windowChanges: 0, skipCount: 0, skippedS: 0, rewindCount: 0, rewoundS: 0
+      };
+      await api("POST", "/api/youtube/progress", { token: pt, body: { video, delta, positionS: 60, event: "periodic" } });
+
+      await api("POST", "/api/youtube/quiz", { token: pt, body: { videoId: video.videoId, positionS: 60 } });
+      assert.equal(lastQuizCall.personalization.difficulty, "standard");
+      assert.deepEqual(lastQuizCall.personalization.avoid, []);
+
+      await api("POST", "/api/youtube/quiz", { token: pt, body: { videoId: video.videoId, positionS: 90 } });
+      assert.deepEqual(lastQuizCall.personalization.avoid, ["What does Arrays avoid?"]);
     });
   });
 });

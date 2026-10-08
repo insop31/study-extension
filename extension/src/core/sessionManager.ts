@@ -9,6 +9,10 @@ import type {
   UserState
 } from "./types";
 
+import type {
+  PersonalNudgeData
+} from "./nudgeEngine";
+
 
 // Session state and active-time accounting live on the backend,
 // so every client sees the same numbers. These are thin wrappers
@@ -46,6 +50,10 @@ export interface NudgeState {
   lastProactiveType: string | null;
 
   failedAttempts: number;
+
+  // This learner's pace and record for the current problem; null when
+  // there is no problem in focus.
+  personal?: PersonalNudgeData | null;
 
 }
 

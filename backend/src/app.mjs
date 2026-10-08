@@ -13,6 +13,8 @@ import {
 } from "./auth.mjs";
 import { rateLimit } from "./rateLimit.mjs";
 import { createSessionService } from "./services/sessionService.mjs";
+import { createProfileService } from "./services/profileService.mjs";
+import { mentorStyle, profileForModel } from "./dashboard/personalize.mjs";
 import { createDashboardService } from "./services/dashboardService.mjs";
 import { createQuizService } from "./services/quizService.mjs";
 import { createYouTubeService } from "./services/youtubeService.mjs";
@@ -152,10 +154,12 @@ function toNudge(row) {
 
 export function createApp({ pool, askMentor, generateQuiz = null, completeText = null, verifyGoogleToken = null, now = () => new Date(), authAttemptsPerMinute = 10, quizRequestsPerMinute = 6, coachRequestsPerHour = 6 }) {
   const app = express();
-  const sessions = createSessionService(pool, now);
+  // What the mentor knows about each learner, from their stored history.
+  const profiles = createProfileService(pool, now);
+  const sessions = createSessionService(pool, now, profiles);
   const auth = requireAuth(pool, now);
-  const youtube = createYouTubeService(pool, now);
-  const quizzes = createQuizService(pool, generateQuiz, now);
+  const youtube = createYouTubeService(pool, now, profiles);
+  const quizzes = createQuizService(pool, generateQuiz, now, profiles);
   const dashboard = createDashboardService(pool, { now, complete: completeText });
 
   app.use(cors());
@@ -484,9 +488,18 @@ export function createApp({ pool, askMentor, generateQuiz = null, completeText =
         [req.userId, body.slug ?? null]
       );
 
+      // Tailor the hint to this learner: their level, how they do in this
+      // topic, problems they already solved, and whether past hints worked.
+      const profile = await profiles.get(req.userId, {
+        topics: body.topics,
+        difficulty: body.difficulty,
+        problemSlug: body.slug
+      });
+
       try {
         res.json(await askMentor({
           ...body,
+          learner: profileForModel(profile),
           activeMinutes: Math.floor((session?.totalActiveTime ?? 0) / 60000),
           recentSignals: rows.map(r => ({
             type: r.activity_type,
@@ -497,7 +510,7 @@ export function createApp({ pool, askMentor, generateQuiz = null, completeText =
           studentQuestion:
             body.studentQuestion?.trim() ||
             "Give me the single most useful next step."
-        }));
+        }, { style: mentorStyle(profile) }));
       } catch (error) {
         console.error("Mentor error:", error);
         res.status(502).json({ success: false, error: "The mentor could not respond right now." });

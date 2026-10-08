@@ -2,6 +2,11 @@ import { useState } from "react";
 
 import type { AuthUser } from "../core/types";
 
+import {
+  ForestScene,
+  PineMark
+} from "../ui/illustrations";
+
 
 interface AuthResponse {
 
@@ -105,17 +110,35 @@ function AuthScreen({
 
     <div className="app">
 
-      <header className="header">
+      <header className="topbar">
 
-        <h1>
-          🧠 Study Mentor
-        </h1>
-
-        <p>
-          Sign in to track your study sessions and get mentoring.
-        </p>
+        <span className="brand">
+          <PineMark />
+          Study Mentor
+        </span>
 
       </header>
+
+
+      <section className="hero" aria-label="Welcome">
+
+        <div className="hero-text">
+
+          <h1>
+            Your quiet study place.
+          </h1>
+
+          <p>
+            Sign in to begin.
+          </p>
+
+        </div>
+
+        <div className="hero-art">
+          <ForestScene />
+        </div>
+
+      </section>
 
 
       <section className="card auth-card">
@@ -186,6 +209,7 @@ function AuthScreen({
 
 
           <button
+            className="btn btn-primary"
             type="submit"
             disabled={busy}
           >
@@ -207,7 +231,7 @@ function AuthScreen({
             </div>
 
             <button
-              className="google-button"
+              className="btn btn-ghost google-button"
               disabled={busy}
               onClick={() => send({ type: "AUTH_GOOGLE" })}
             >

@@ -1,3 +1,5 @@
+import { quizPersonalization } from "../dashboard/personalize.mjs";
+
 // Stores quiz questions and grades answers. The correct answer and the
 // explanation stay on the server until the learner has answered.
 
@@ -15,7 +17,7 @@ function toResult(row) {
   };
 }
 
-export function createQuizService(pool, generateQuiz, now = () => new Date()) {
+export function createQuizService(pool, generateQuiz, now = () => new Date(), profiles = null) {
 
   async function latestWatch(userId, videoId) {
     const { rows } = await pool.query(
@@ -40,6 +42,20 @@ export function createQuizService(pool, generateQuiz, now = () => new Date()) {
       return { status: 404, error: "Watch the video for a moment before asking for a question." };
     }
 
+    // Pitch the question at this learner, revisit what they got wrong, and
+    // don't repeat questions already asked on this video.
+    let personalization = null;
+    if (profiles) {
+      const { rows: asked } = await pool.query(
+        `SELECT question FROM video_quizzes
+         WHERE user_id = $1 AND video_id = $2
+         ORDER BY created_at DESC LIMIT 5`,
+        [userId, videoId]
+      );
+      const profile = await profiles.get(userId, { topics: watch.topics });
+      personalization = quizPersonalization(profile, asked.map(r => r.question));
+    }
+
     const generated = await generateQuiz({
       video: {
         title: watch.title,
@@ -47,7 +63,8 @@ export function createQuizService(pool, generateQuiz, now = () => new Date()) {
         topics: watch.topics
       },
       excerpt: excerpt ?? null,
-      positionS
+      positionS,
+      personalization
     });
 
     if (!generated.success) {
@@ -119,6 +136,8 @@ export function createQuizService(pool, generateQuiz, now = () => new Date()) {
         [quiz.nudge_id]
       );
     }
+
+    profiles?.invalidate(userId);
 
     return { result: toResult(graded ?? { ...quiz, answered_at: now() }) };
   }

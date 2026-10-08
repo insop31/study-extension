@@ -80,19 +80,36 @@ export function rewatchRange({ evidenceStartS, excerpt, positionS }) {
 }
 
 export function createQuizGenerator(complete, random = Math.random) {
-  return async function generateQuiz({ video, excerpt, positionS }) {
+  // personalization (optional): { difficulty, instruction, revisit, avoid }
+  return async function generateQuiz({ video, excerpt, positionS, personalization = null }) {
     const input = JSON.stringify({
       title: video.title,
       channel: video.channel ?? undefined,
       topics: video.topics,
-      transcript: excerpt?.text ?? null
+      transcript: excerpt?.text ?? null,
+      ...(personalization
+        ? {
+          difficulty: personalization.difficulty,
+          conceptsTheyRecentlyGotWrong: personalization.revisit,
+          questionsAlreadyAsked: personalization.avoid
+        }
+        : {})
     });
+
+    const instructions = personalization
+      ? [
+        INSTRUCTIONS,
+        personalization.instruction,
+        "If the excerpt covers one of conceptsTheyRecentlyGotWrong, prefer a question on it.",
+        "Never repeat or closely paraphrase any of questionsAlreadyAsked."
+      ].join(" ")
+      : INSTRUCTIONS;
 
     let lastError = "The mentor could not write a question right now.";
 
     // One retry: models occasionally wrap the JSON in prose or break it.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const result = await complete({ instructions: INSTRUCTIONS, input, maxOutputTokens: 6000 });
+      const result = await complete({ instructions, input, maxOutputTokens: 6000 });
       if (!result.success) return { success: false, error: result.error };
 
       const parsed = parseQuiz(result.text);

@@ -416,6 +416,19 @@ Days follow your own time zone, which the dashboard sets from your browser.
 | `coach_reports` | AI study plans |
 | `users.timezone`, `users.daily_goal_minutes` | Calendar days and the daily goal |
 
+### Personalised mentoring
+
+The mentor adapts to each learner from their stored history, not one script for everyone. A **learner profile** (`backend/src/dashboard/learnerProfile.mjs`) is built from the database: level (from problems solved by difficulty), preferred language, typical time to solve per difficulty, attempts usually needed, strong and weak topics, related problems already solved, video-quiz accuracy and recently missed concepts, video habits (focus, switching, skipping), and whether earlier AI hints were followed by a solve. The rules that use it are in `backend/src/dashboard/personalize.mjs`:
+
+| Part of the mentor | How it adapts |
+| --- | --- |
+| AI hints (LeetCode) | Plain language for beginners, brief for advanced learners. In a weak topic: concrete hints that name the technique. In a strong topic: one Socratic question, unless earlier hints didn't lead to a solve, in which case more specific. Links to related problems already solved; uses their programming language; suggests testing an edge case if they often submit too early. |
+| LeetCode nudges | Timed from their own usual solving time for that difficulty (5-30 min) using time on *this* problem, not a fixed 10 minutes. "Stuck" waits past the attempts they normally need. Wording mentions their pace, builds on strong topics, simplifies for weak ones, and points back to a solved problem in the same topic. |
+| Quiz questions | Foundational, standard or challenging from their quiz accuracy; re-tests concepts they recently got wrong; never repeats a question on the same video. |
+| Video prompts | Recall prompts come sooner for learners who get questions wrong and later for confident ones. Habitual tab-switchers are only reminded when switching is unusual for them. A personal line is added to the recall prompt for weak topics or recent misses. |
+
+With no history, everything falls back to the general behaviour.
+
 ### Sign-in and Google setup
 
 The side panel asks you to sign in with email + password, or with Google. Passwords are stored as scrypt hashes; tokens are random, stored hashed, per device, and expire after 30 days. A Google account whose verified email matches an existing password account is linked to it.

@@ -2374,7 +2374,10 @@ async function evaluateCurrentNudge(
         session.userState,
 
       failedAttempts:
-        state.failedAttempts
+        state.failedAttempts,
+
+      personal:
+        state.personal ?? null
 
     });
 

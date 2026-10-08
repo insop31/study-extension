@@ -48,7 +48,24 @@ function mainTopic(watch) {
  * @param {Date} input.now
  * @returns {{ type: string, message: string, priority: string } | null}
  */
-export function decideVideoNudge({ watch, event, lastNudgeAt, lastRecallAt, now }) {
+/**
+ * thresholds (optional): { afterPauseS, afterWatchS, switchesForFocus } for this learner
+ * notes (optional): { recall, focus } personal lines appended to the message
+ */
+export function decideVideoNudge({
+  watch,
+  event,
+  lastNudgeAt,
+  lastRecallAt,
+  now,
+  thresholds = {},
+  notes = {}
+}) {
+  const afterPauseS = thresholds.afterPauseS ?? AFTER_PAUSE_S;
+  const afterWatchS = thresholds.afterWatchS ?? AFTER_WATCH_S;
+  const switchesForFocus = thresholds.switchesForFocus ?? SWITCHES_FOR_FOCUS;
+  const withNote = (message, note) => (note ? `${message} ${note}` : message);
+
   if (lastNudgeAt && now.getTime() - lastNudgeAt.getTime() < MIN_GAP_MS) {
     return null;
   }
@@ -67,20 +84,22 @@ export function decideVideoNudge({ watch, event, lastNudgeAt, lastRecallAt, now 
     attentive &&
     !(lastRecallAt && now.getTime() - lastRecallAt.getTime() < RECALL_COOLDOWN_MS);
 
-  const recall = { type: "ACTIVE_RECALL", message: RECALL_MESSAGE, priority: "low" };
+  const recall = { type: "ACTIVE_RECALL", message: withNote(RECALL_MESSAGE, notes.recall), priority: "low" };
 
   if (event === "ended" && recallAllowed && sinceRecall >= AFTER_END_S) {
     return recall;
   }
 
   const switches = watch.tab_changes + watch.window_changes - watch.switch_marker;
-  if (switches >= SWITCHES_FOR_FOCUS) {
+  if (switches >= switchesForFocus) {
     return {
       type: "FOCUS_REMINDER",
       priority: "medium",
-      message:
+      message: withNote(
         `You've switched away from the video ${switches} times. ` +
-        "Try keeping it in focus, or pause it while you check something else."
+        "Try keeping it in focus, or pause it while you check something else.",
+        notes.focus
+      )
     };
   }
 
@@ -109,8 +128,8 @@ export function decideVideoNudge({ watch, event, lastNudgeAt, lastRecallAt, now 
     };
   }
 
-  if (recallAllowed && event === "pause" && sinceRecall >= AFTER_PAUSE_S) return recall;
-  if (recallAllowed && sinceRecall >= AFTER_WATCH_S) return recall;
+  if (recallAllowed && event === "pause" && sinceRecall >= afterPauseS) return recall;
+  if (recallAllowed && sinceRecall >= afterWatchS) return recall;
 
   return null;
 }

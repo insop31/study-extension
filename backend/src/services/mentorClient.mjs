@@ -106,9 +106,14 @@ export function createCompleter({ apiKey, model, fetchImpl = fetch }) {
 export function createMentorClient({ apiKey, model, fetchImpl = fetch }) {
   const complete = createCompleter({ apiKey, model, fetchImpl });
 
-  return async function askMentor(learnerContext) {
+  // style: extra instructions that adapt the hint to this learner.
+  return async function askMentor(learnerContext, { style = [] } = {}) {
     const result = await complete({
-      instructions: INSTRUCTIONS,
+      instructions: [
+        INSTRUCTIONS,
+        "The input's `learner` field describes this student's history; use it to pitch the hint at the right level, but never recite their statistics back to them.",
+        ...style
+      ].join(" "),
       input: JSON.stringify(learnerContext),
       maxOutputTokens: 3000
     });

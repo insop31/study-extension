@@ -13,6 +13,17 @@ import type {
 
 import AuthScreen from "./AuthScreen";
 
+import {
+  BunnyAvatar,
+  ForestScene,
+  PineMark,
+  Sprout
+} from "../ui/illustrations";
+
+import { greeting } from "../ui/greeting";
+
+import * as Icons from "../ui/icons";
+
 import { googleEnabled } from "../api/auth";
 
 import type {
@@ -639,6 +650,11 @@ function formatTime(
   }
 
 
+  const firstName =
+    user.name?.trim().split(/\s+/)[0] ||
+    user.email.split("@")[0];
+
+
   // ------------------------------------------------
   // RENDER
   // ------------------------------------------------
@@ -651,46 +667,67 @@ function formatTime(
       {/* HEADER */}
       {/* ------------------------------------------ */}
 
-      <header className="header">
+      <header className="topbar">
 
-        <h1>
-          🧠 Study Mentor
-        </h1>
+        <span className="brand">
+          <PineMark />
+          Study Mentor
+        </span>
 
-        <p>
-          Your personal AI learning companion
-        </p>
+        <span className="user-bar">
 
-        <div className="user-bar">
-
-          <span title={user.email}>
+          <span className="user-name" title={user.email}>
             {user.name || user.email}
           </span>
 
           <button
-            className="link-button"
+            className="icon-button"
             onClick={onSignOut}
+            title="Sign out"
+            aria-label="Sign out"
           >
-            Sign out
+            <Icons.Logout />
           </button>
+
+        </span>
+
+      </header>
+
+
+      <section className="hero" aria-label="Welcome">
+
+        <div className="hero-text">
+
+          <h1>
+            {greeting()}, {firstName}.
+          </h1>
+
+          <p>
+            Small steps, steady growth.
+          </p>
 
         </div>
 
+        <div className="hero-art">
+          <ForestScene />
+        </div>
 
-        <button
-          className="dashboard-button"
-          onClick={() => {
+      </section>
 
-            void chrome.tabs.create({
-              url: chrome.runtime.getURL("src/dashboard/index.html")
-            });
 
-          }}
-        >
-          📊 Open learning dashboard
-        </button>
+      <button
+        className="btn btn-sage dashboard-link"
+        onClick={() => {
 
-      </header>
+          void chrome.tabs.create({
+            url: chrome.runtime.getURL("src/dashboard/index.html")
+          });
+
+        }}
+      >
+        <Icons.Chart />
+        Open learning dashboard
+      </button>
 
 
       {/* ------------------------------------------ */}
@@ -700,7 +737,8 @@ function formatTime(
       <section className="card">
 
         <h2>
-          Current Activity
+          <Icons.Leaf />
+          Current activity
         </h2>
 
 
@@ -714,8 +752,16 @@ function formatTime(
                 Website
               </span>
 
-              <span>
-                {context.website}
+              <span
+                className={
+                  `chip ${context.website === "leetcode" ? "cool" : context.website === "youtube" ? "warm" : ""}`
+                }
+              >
+                {context.website === "leetcode"
+                  ? "LeetCode"
+                  : context.website === "youtube"
+                    ? "YouTube"
+                    : context.website}
               </span>
 
             </div>
@@ -942,7 +988,8 @@ function formatTime(
       <section className="card">
 
         <h2>
-          ⏱ Study Session
+          <Icons.Timer />
+          Study session
         </h2>
 
 
@@ -984,7 +1031,7 @@ function formatTime(
         {session?.isActive ? (
 
           <button
-            className="end-button"
+            className="btn btn-ghost session-button"
             onClick={
               handleEndSession
             }
@@ -997,6 +1044,7 @@ function formatTime(
         ) : (
 
           <button
+            className="btn btn-primary session-button"
             onClick={
               handleStartSession
             }
@@ -1019,13 +1067,19 @@ function formatTime(
 
         <div className="mentor-title">
 
-          <span>
-            💡
-          </span>
+          <BunnyAvatar size={38} />
 
-          <h2>
-            Mentor
-          </h2>
+          <div>
+
+            <h2>
+              Mentor
+            </h2>
+
+            <span className="mentor-subtitle">
+              Watching quietly, here when you need me
+            </span>
+
+          </div>
 
         </div>
 
@@ -1047,7 +1101,7 @@ function formatTime(
 
 
             <button
-              className="dismiss-button"
+              className="btn btn-sage dismiss-button"
               onClick={() => {
 
                 setNudge(
@@ -1070,13 +1124,16 @@ function formatTime(
 
         ) : (
 
-          <p>
+          <div className="mentor-idle">
 
-            I'm observing your study session.
-            I'll step in when I detect a useful
-            opportunity to help.
+            <p>
+              I'm following your study session and will
+              step in when a hint or a question would help.
+            </p>
 
-          </p>
+            <Sprout size={34} />
+
+          </div>
 
         )}
 
