@@ -43,17 +43,28 @@ before(async () => {
   let url = process.env.TEST_DATABASE_URL;
 
   if (!url) {
-    dataDir = await mkdtemp(join(tmpdir(), "mentor-pg-"));
-    embedded = new EmbeddedPostgres({
-      databaseDir: dataDir,
-      user: "postgres",
-      password: "postgres",
-      port: pgPort,
-      persistent: false
-    });
-    await embedded.initialise();
-    await embedded.start();
-    url = `postgres://postgres:postgres@localhost:${pgPort}/postgres`;
+    // Starting a throwaway server occasionally fails on Windows (a port or
+    // folder still held by an earlier run); retry on a fresh port and folder.
+    for (let attempt = 1; ; attempt++) {
+      const port = attempt === 1 ? pgPort : 55000 + Math.floor(Math.random() * 5000);
+      dataDir = await mkdtemp(join(tmpdir(), "mentor-pg-"));
+      embedded = new EmbeddedPostgres({
+        databaseDir: dataDir,
+        user: "postgres",
+        password: "postgres",
+        port,
+        persistent: false
+      });
+      try {
+        await embedded.initialise();
+        await embedded.start();
+        url = `postgres://postgres:postgres@localhost:${port}/postgres`;
+        break;
+      } catch (error) {
+        await embedded.stop().catch(() => {});
+        if (attempt === 3) throw error;
+      }
+    }
   }
 
   pool = createPool(url);
@@ -266,7 +277,9 @@ describe("study mentor API", () => {
 
     await api("POST", `/api/nudges/${id}/dismiss`, { token });
     res = await api("GET", "/api/nudges/current", { token });
-    assert.equal(res.body.nudge, null);
+    // Only the "new topic" concept reminder from the first activity may remain.
+    assert.notEqual(res.body.nudge?.id, id);
+    assert.ok(res.body.nudge === null || res.body.nudge.type === "CONCEPT_REMINDER");
   });
 
   it("asks the mentor with server-side context", async () => {
@@ -448,6 +461,7 @@ describe("study mentor API", () => {
     });
 
     it("asks the learner to recall when they pause after a real stretch", async () => {
+      advance(1_000); // after the "new topic" reminder from the first report
       const res = await progress("pause", { pauseCount: 1, ...watchMinutes(0.2) }, 110);
       assert.equal(res.body.nudge.type, "ACTIVE_RECALL");
       assert.equal(
@@ -625,7 +639,8 @@ describe("study mentor API", () => {
 
       assert.equal((await api("GET", "/api/nudges/current", { token: qt })).body.nudge.id, nudge.id);
       await api("POST", `/api/youtube/quiz/${quiz.id}/answer`, { token: qt, body: { chosenIndex: 0 } });
-      assert.equal((await api("GET", "/api/nudges/current", { token: qt })).body.nudge, null);
+      const after = (await api("GET", "/api/nudges/current", { token: qt })).body.nudge;
+      assert.notEqual(after?.id, nudge.id);
     });
 
     it("summarises quiz results for the video and the stats", async () => {
@@ -815,4 +830,146 @@ describe("study mentor API", () => {
       assert.deepEqual(lastQuizCall.personalization.avoid, ["What does Arrays avoid?"]);
     });
   });
+
+  describe("pause, breaks, reminders, focus and other sites", () => {
+    let t;
+    const MIN = 60_000;
+    const lc = slug => ({ website: "leetcode", title: `${slug} - LeetCode`, url: `https://leetcode.com/problems/${slug}/` });
+    const act = (slug, extra = {}) => api("POST", "/api/sessions/current/activity", {
+      token: t,
+      body: { ...lc(slug), activityType: "keydown", problemSlug: slug, difficulty: "Easy", topics: ["Graph"], ...extra }
+    });
+
+    before(async () => {
+      t = (await signup("objectives@example.com")).body.token;
+      await api("POST", "/api/sessions", { token: t, body: lc("graph-valid-tree") });
+    });
+
+    it("pauses on request and ignores activity until resumed", async () => {
+      await act("graph-valid-tree");
+      advance(30_000);
+      let res = await act("graph-valid-tree");
+      const before = res.body.session.totalActiveTime;
+
+      res = await api("POST", "/api/sessions/current/pause", { token: t });
+      assert.equal(res.body.session.userState, "paused");
+      assert.equal(res.body.session.pausedByUser, true);
+
+      advance(30_000);
+      res = await act("graph-valid-tree");
+      assert.equal(res.body.session.totalActiveTime, before);
+      assert.equal(res.body.session.pausedByUser, true);
+
+      // The browser saying "active" does not end a deliberate pause.
+      res = await api("PUT", "/api/sessions/current/state", { token: t, body: { state: "active" } });
+      assert.equal(res.body.session.userState, "paused");
+
+      res = await api("POST", "/api/sessions/current/resume", { token: t });
+      assert.equal(res.body.session.pausedByUser, false);
+      assert.equal(res.body.session.userState, "active");
+
+      advance(10_000);
+      res = await act("graph-valid-tree");
+      assert.equal(res.body.session.totalActiveTime, before + 10_000);
+    });
+
+    it("suggests one break after an hour of continuous study", async () => {
+      const notices = [];
+      for (let i = 0; i < 75; i++) {
+        advance(50_000);
+        const res = await act("graph-valid-tree");
+        if (res.body.notice) notices.push(res.body.notice);
+      }
+      const breaks = notices.filter(n => n.type === "BREAK_REMINDER");
+      assert.equal(breaks.length, 1);
+      assert.match(breaks[0].message, /studying for (6\d) minutes without a break/);
+    });
+
+    it("counts a long gap as a break", async () => {
+      advance(10 * MIN);
+      await act("graph-valid-tree");
+      const { body } = await api("GET", "/api/sessions/current", { token: t });
+      assert.equal(body.session.isActive, true);
+    });
+
+    it("reminds the learner of the key idea for a topic they struggle with", async () => {
+      // Struggle with graphs: four failed submissions.
+      for (let i = 0; i < 4; i++) {
+        advance(20_000);
+        await act("graph-valid-tree", { activityType: "submission", submissionResult: "wrong_answer" });
+      }
+      advance(21 * 60 * MIN); // the next day, and past the profile cache
+
+      const res = await act("number-of-islands");
+      assert.equal(res.body.notice.type, "CONCEPT_REMINDER");
+      assert.match(res.body.notice.message, /Graphs has been tricky for you so far. Key idea:/);
+
+      // Not again for the same topic today.
+      advance(MIN);
+      const again = await act("clone-graph");
+      assert.ok(!again.body.notice || again.body.notice.type !== "CONCEPT_REMINDER");
+    });
+
+    it("notices repeated switching away from a problem", async () => {
+      const away = () => api("POST", "/api/sessions/current/distraction", {
+        token: t, body: { kind: "tab", website: "leetcode", problemSlug: "clone-graph", title: "Clone Graph - LeetCode" }
+      });
+      assert.equal((await away()).body.nudge, null);
+      assert.equal((await away()).body.nudge, null);
+      const third = await away();
+      assert.equal(third.body.nudge.type, "FOCUS_REMINDER");
+      assert.match(third.body.nudge.message, /switched away from Clone Graph 3 times/);
+      assert.equal((await away()).body.nudge, null); // counter restarted, cooldown running
+    });
+
+    it("tracks study on other educational sites as reading", async () => {
+      const page = {
+        website: "mdn", title: "Closures - JavaScript | MDN",
+        url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures",
+        activityType: "scroll", topics: ["JavaScript"], pageKind: "reading"
+      };
+      advance(10_000);
+      await api("POST", "/api/sessions/current/activity", { token: t, body: page });
+      advance(40_000);
+      await api("POST", "/api/sessions/current/activity", { token: t, body: page });
+
+      const { body } = await api("GET", "/api/dashboard", { token: t });
+      assert.equal(body.summary.pagesRead, 1);
+      assert.equal(body.summary.readingMs, 40_000);
+      assert.equal(body.reading.recent[0].site, "MDN Web Docs");
+      const js = body.topics.find(x => x.topic === "JavaScript");
+      assert.deepEqual(js.sources, ["web"]);
+      assert.equal(js.studyMs, 40_000);
+      assert.ok(body.weekly.days.some(d => d.otherMs > 0));
+    });
+
+    it("reports study rhythm and focus on the dashboard", async () => {
+      const { body } = await api("GET", "/api/dashboard", { token: t });
+      assert.equal(body.rhythm.periods.length, 4);
+      assert.ok(body.rhythm.periods.reduce((acc, p) => acc + p.studyMs, 0) > 0);
+      assert.equal(body.rhythm.periods.reduce((acc, p) => acc + p.attempts, 0), 4);
+      assert.equal(body.focus.breaksSuggestedThisWeek >= 0, true);
+    });
+
+    it("rejects unknown sites", async () => {
+      const res = await api("POST", "/api/sessions/current/activity", {
+        token: t, body: { website: "example", title: "x", url: "https://example.com", activityType: "scroll" }
+      });
+      assert.equal(res.status, 400);
+    });
+
+    it("answers questions about a video or page, not just LeetCode", async () => {
+      await api("POST", "/api/mentor", {
+        token: t,
+        body: {
+          platform: "youtube", title: "Graphs explained", topics: ["Graphs"],
+          excerpt: "[120] BFS explores level by level.", studentQuestion: "Why use a queue?"
+        }
+      });
+      assert.equal(lastMentorCall.options.platform, "youtube");
+      assert.equal(lastMentorCall.ctx.excerpt, "[120] BFS explores level by level.");
+      assert.equal(lastMentorCall.ctx.recentSignals.length, 0);
+    });
+  });
 });
+

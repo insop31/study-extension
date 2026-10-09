@@ -29,6 +29,9 @@ import {
   recordActivity,
   setUserState,
   endSession,
+  pauseSession,
+  resumeSession,
+  recordDistraction,
   getCurrentNudge,
   saveNudge,
   dismissNudge,
@@ -1525,6 +1528,38 @@ chrome.runtime.onMessage.addListener(
 
 
     // ==============================================
+    // PAUSE / RESUME
+    // ==============================================
+
+    if (
+      message.type === "PAUSE_SESSION" ||
+      message.type === "RESUME_SESSION"
+    ) {
+
+      (message.type === "PAUSE_SESSION" ? pauseSession() : resumeSession())
+        .then(session => {
+
+          sendResponse({ success: true, session });
+
+        })
+        .catch(error => {
+
+          console.error(
+            "Pause/resume error:",
+            error
+          );
+
+          sendResponse({ success: false });
+
+        });
+
+
+      return true;
+
+    }
+
+
+    // ==============================================
     // END SESSION
     // ==============================================
 
@@ -1915,7 +1950,10 @@ async function handleUserActivity(
         programmingLanguage:
           context.programmingLanguage,
 
-        submissionResult
+        submissionResult,
+
+        pageKind:
+          context.pageKind
       }
 
     );
@@ -1924,6 +1962,21 @@ async function handleUserActivity(
   if (!result) {
 
     return;
+
+  }
+
+
+  // A break suggestion or a concept reminder: also show it on the page.
+  if (
+    result.notice &&
+    currentTabId !== null
+  ) {
+
+    showNote(
+      currentTabId,
+      result.notice.id,
+      result.notice.message
+    );
 
   }
 
@@ -2189,7 +2242,8 @@ async function offerQuiz(
 }
 
 
-// Records a tab or window change against the video that tab is playing.
+// Records a tab or window change against what the tab was being used to
+// study: the video playing in it, or the LeetCode problem open in it.
 async function recordVideoEvent(
   tabId: number,
   counts: Partial<Pick<VideoDelta, "tabChanges" | "windowChanges">>,
@@ -2203,14 +2257,19 @@ async function recordVideoEvent(
   }
 
 
-  const video =
+  const page =
     await chrome.tabs.sendMessage(
       tabId,
-      { type: "GET_VIDEO_INFO" }
-    ).catch(() => null) as VideoInfo | null;
+      { type: "GET_PAGE_INFO" }
+    ).catch(() => null) as {
+      website: string;
+      title: string;
+      problemSlug?: string;
+      video: VideoInfo | null;
+    } | null;
 
 
-  if (!video?.educational) {
+  if (!page) {
 
     return;
 
@@ -2221,20 +2280,50 @@ async function recordVideoEvent(
     await getCurrentSession();
 
 
-  if (!session?.isActive) {
+  if (!session?.isActive || session.pausedByUser) {
 
     return;
 
   }
 
 
-  await postVideoProgress(
-    video,
-    { ...emptyDelta(), ...counts },
-    0,
-    event,
-    tabId
-  );
+  // Watching a lecture: counted on the video.
+  if (page.video?.educational) {
+
+    await postVideoProgress(
+      page.video,
+      { ...emptyDelta(), ...counts },
+      0,
+      event,
+      tabId
+    );
+
+    return;
+
+  }
+
+
+  // Working on a LeetCode problem: counted on the problem.
+  if (
+    page.website === "leetcode" &&
+    page.problemSlug
+  ) {
+
+    const nudge =
+      await recordDistraction({
+        kind: counts.tabChanges ? "tab" : "window",
+        website: page.website,
+        problemSlug: page.problemSlug,
+        title: page.title
+      });
+
+    if (nudge) {
+
+      showNote(tabId, nudge.id, nudge.message);
+
+    }
+
+  }
 
 }
 
@@ -2431,7 +2520,7 @@ async function getMentorGuidance(
 
   if (
     !currentContext ||
-    currentContext.website !== "leetcode"
+    currentContext.website === "unknown"
   ) {
 
     return {
@@ -2439,25 +2528,97 @@ async function getMentorGuidance(
       success: false,
 
       error:
-        "Open a LeetCode problem before asking the mentor."
+        "Open a study page (LeetCode, an educational video, or a supported site) before asking the mentor."
 
     };
 
   }
 
 
+  const context =
+    currentContext;
+
+
   try {
+
+    // A LeetCode problem: hints about the problem and the current code.
+    if (context.website === "leetcode") {
+
+      return await api<MentorResponse>(
+        "POST",
+        "/mentor",
+        {
+          platform: "leetcode",
+          problem: context.title,
+          slug: context.problemSlug,
+          difficulty: context.difficulty,
+          topics: context.topics,
+          programmingLanguage: context.programmingLanguage,
+          currentCode:
+            code ??
+            (currentTabId !== null ? codeByTab.get(currentTabId)?.code : undefined),
+          studentQuestion: question
+        }
+      );
+
+    }
+
+
+    // A video: explanation from the transcript around where they are.
+    if (context.website === "youtube") {
+
+      if (!context.video?.educational || currentTabId === null) {
+
+        return {
+          success: false,
+          error: "Open an educational video to ask about it."
+        };
+
+      }
+
+      const where =
+        await chrome.tabs.sendMessage(
+          currentTabId,
+          { type: "GET_TRANSCRIPT_EXCERPT" }
+        ).catch(() => null) as {
+          positionS: number;
+          excerpt: { text: string } | null;
+        } | null;
+
+      return await api<MentorResponse>(
+        "POST",
+        "/mentor",
+        {
+          platform: "youtube",
+          title: context.video.title,
+          topics: context.video.topics,
+          excerpt: where?.excerpt?.text,
+          positionS: where?.positionS,
+          studentQuestion: question
+        }
+      );
+
+    }
+
+
+    // Any other supported site: the selected text or the page's main text.
+    const page =
+      currentTabId !== null
+        ? await chrome.tabs.sendMessage(
+          currentTabId,
+          { type: "GET_PAGE_EXCERPT" }
+        ).catch(() => null) as { excerpt: string } | null
+        : null;
 
     return await api<MentorResponse>(
       "POST",
       "/mentor",
       {
-        problem: currentContext.title,
-        slug: currentContext.problemSlug,
-        difficulty: currentContext.difficulty,
-        topics: currentContext.topics,
-        programmingLanguage: currentContext.programmingLanguage,
-        currentCode: code,
+        platform: "web",
+        site: context.website,
+        title: context.title,
+        topics: context.topics,
+        excerpt: page?.excerpt || undefined,
         studentQuestion: question
       }
     );

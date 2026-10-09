@@ -1,5 +1,7 @@
 import { defineManifest } from "@crxjs/vite-plugin";
 
+import { matchPatterns } from "./core/sites.ts";
+
 export default defineManifest({
   manifest_version: 3,
 
@@ -48,12 +50,8 @@ export default defineManifest({
 
   content_scripts: [
     {
-      matches: [
-        "https://leetcode.com/*",
-        "https://*.leetcode.com/*",
-        "https://www.youtube.com/*",
-        "https://youtube.com/*"
-      ],
+      // Every supported educational site (see src/core/sites.ts).
+      matches: matchPatterns(),
 
       js: [
         "src/content/content.ts"

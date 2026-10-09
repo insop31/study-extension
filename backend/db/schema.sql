@@ -261,3 +261,48 @@ FROM problem_attempts a
 WHERE NOT EXISTS (SELECT 1 FROM problem_progress)
 GROUP BY a.user_id, a.problem_id
 ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Pause/resume, break and concept reminders, distractions, study rhythm,
+-- and other educational sites
+-- ---------------------------------------------------------------------------
+
+-- A session the learner paused on purpose stays paused until they resume,
+-- whatever activity or idle events arrive meanwhile.
+ALTER TABLE study_sessions ADD COLUMN IF NOT EXISTS paused_by_user boolean NOT NULL DEFAULT false;
+
+-- Start of the current uninterrupted stretch of study, for break reminders.
+-- Reset by a pause or a gap of a few minutes.
+ALTER TABLE study_sessions ADD COLUMN IF NOT EXISTS focus_since timestamptz;
+
+-- Tab and window switches while working on a problem.
+ALTER TABLE problem_progress ADD COLUMN IF NOT EXISTS switches integer NOT NULL DEFAULT 0;
+ALTER TABLE problem_progress ADD COLUMN IF NOT EXISTS switch_marker integer NOT NULL DEFAULT 0;
+
+-- Which topic a note was about (concept reminders are once per topic per day).
+ALTER TABLE mentor_interactions ADD COLUMN IF NOT EXISTS topic text;
+
+-- Active study time per learner, per local day and hour, for "when you study best".
+CREATE TABLE IF NOT EXISTS study_time_hourly (
+  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day        date NOT NULL,
+  hour       smallint NOT NULL CHECK (hour BETWEEN 0 AND 23),
+  active_ms  bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day, hour)
+);
+
+-- Pages read on other educational sites (documentation, tutorials, courses,
+-- problem sites without a dedicated tracker).
+CREATE TABLE IF NOT EXISTS page_reads (
+  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  url         text NOT NULL,
+  site        text NOT NULL,
+  title       text NOT NULL,
+  kind        text NOT NULL DEFAULT 'reading',
+  topics      text[] NOT NULL DEFAULT '{}',
+  active_ms   bigint NOT NULL DEFAULT 0,
+  first_seen  timestamptz NOT NULL,
+  last_seen   timestamptz NOT NULL,
+  PRIMARY KEY (user_id, url)
+);
+CREATE INDEX IF NOT EXISTS page_reads_user_seen_idx ON page_reads (user_id, last_seen DESC);

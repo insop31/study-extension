@@ -18,7 +18,7 @@ const youtubeSearch = topic =>
  * @returns {Array<{ id, kind, priority, title, detail, action? }>}
  *   priority: 1 = do this first, 3 = nice to know
  */
-export function buildRecommendations({ summary, topics, problems, byDifficulty, dailyGoalMinutes }) {
+export function buildRecommendations({ summary, topics, problems, byDifficulty, dailyGoalMinutes, rhythm = null, focus = null }) {
   const recs = [];
   const add = rec => recs.push(rec);
 
@@ -152,7 +152,33 @@ export function buildRecommendations({ summary, topics, problems, byDifficulty, 
     }
   }
 
-  // 8. Streak encouragement.
+  // 8. Study at the time of day you are sharpest.
+  if (rhythm?.sharpest && rhythm.mostStudied && rhythm.sharpest !== rhythm.mostStudied) {
+    const sharp = rhythm.periods.find(p => p.id === rhythm.sharpest);
+    const usual = rhythm.periods.find(p => p.id === rhythm.mostStudied);
+    if (sharp.accuracy - (usual.accuracy ?? rhythm.overallAccuracy ?? 0) >= 15) {
+      add({
+        id: "rhythm",
+        kind: "habit",
+        priority: 3,
+        title: `Do your hardest problems in the ${sharp.label.toLowerCase()}`,
+        detail: `${sharp.accuracy}% of your ${sharp.label.toLowerCase()} submissions are accepted, against ${usual.accuracy ?? rhythm.overallAccuracy}% in the ${usual.label.toLowerCase()}, when you study most.`
+      });
+    }
+  }
+
+  // 9. Frequent switching away from problems.
+  if (focus?.problemSwitchesPerHour !== null && focus?.problemSwitchesPerHour >= 12) {
+    add({
+      id: "focus",
+      kind: "habit",
+      priority: 2,
+      title: "Protect your focus while solving",
+      detail: `You switch away from problems about ${focus.problemSwitchesPerHour} times an hour. Try 25-minute blocks with other tabs closed, then a short break.`
+    });
+  }
+
+  // 10. Streak encouragement.
   if (summary.streakDays >= 3) {
     add({
       id: "streak",

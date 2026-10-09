@@ -30,6 +30,15 @@ import {
   detectPlatformFromHostname
 } from "../core/contextEngine";
 
+import {
+  isReadingSite
+} from "../core/sites";
+
+import {
+  pageExcerpt,
+  readingMetadata
+} from "./pageReader";
+
 
 // --------------------------------------------------
 // TYPES
@@ -455,6 +464,11 @@ function getPageContext():
 
     ...(currentVideo
       ? { video: currentVideo }
+      : {}),
+
+    // Other educational sites: topics and page kind.
+    ...(isReadingSite(getWebsite())
+      ? readingMetadata()
       : {})
 
   };
@@ -1644,3 +1658,81 @@ if (getWebsite() === "youtube") {
   );
 
 }
+
+
+// --------------------------------------------------
+// QUESTIONS FROM THE BACKGROUND SCRIPT (ALL SITES)
+// --------------------------------------------------
+
+chrome.runtime.onMessage.addListener(
+  (message, _sender, sendResponse) => {
+
+    // Which page and problem/video this tab is on, when the learner leaves
+    // it (tab or window change).
+    if (message?.type === "GET_PAGE_INFO") {
+
+      const context =
+        getPageContext();
+
+      sendResponse({
+        website: context.website,
+        title: context.title,
+        url: context.url,
+        problemSlug: context.problemSlug,
+        topics: context.topics,
+        video: currentVideo?.educational ? currentVideo : null
+      });
+
+      return;
+
+    }
+
+
+    // The text a question to the mentor is about.
+    if (message?.type === "GET_PAGE_EXCERPT") {
+
+      sendResponse({
+        excerpt: pageExcerpt()
+      });
+
+      return;
+
+    }
+
+
+    // A mentor note shown on the page. YouTube has its own handler (it can
+    // pause and replay the video).
+    if (
+      message?.type === "SHOW_RECALL_PROMPT" &&
+      getWebsite() !== "youtube"
+    ) {
+
+      showMentorCard(
+        {
+          nudgeId: message.nudgeId,
+          message: message.message,
+          loading: Boolean(message.loading)
+        },
+        {
+          onDismiss: nudgeId => {
+
+            chrome.runtime.sendMessage({
+              type: "DISMISS_NUDGE",
+              nudgeId
+            }).catch(() => {
+
+              // Extension may have been reloaded.
+
+            });
+
+          },
+          onAnswer: async () => null,
+          onRewatch: () => {}
+        }
+      );
+
+    }
+
+  }
+);
+

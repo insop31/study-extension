@@ -31,6 +31,9 @@ export interface DashboardTopic {
 
   videoWatchMs: number;
 
+  // Time on pages of other educational sites.
+  readingMs: number;
+
   studyMs: number;
 
   quizAnswered: number;
@@ -102,6 +105,44 @@ export interface DashboardData {
     quizAccuracy: number | null;
     mentorNotesThisWeek: number;
     topicsStudied: number;
+    pagesRead: number;
+    readingMs: number;
+  };
+
+  reading: {
+    recent: Array<{
+      url: string;
+      title: string;
+      site: string;
+      kind: string;
+      topics: string[];
+      timeMs: number;
+      lastSeen: number;
+    }>;
+  };
+
+  // When in the day the learner studies, and how accurate they are then.
+  rhythm: {
+    periods: Array<{
+      id: string;
+      label: string;
+      hours: string;
+      studyMs: number;
+      attempts: number;
+      accepted: number;
+      accuracy: number | null;
+    }>;
+    mostStudied: string | null;
+    sharpest: string | null;
+    overallAccuracy: number | null;
+    insight: string | null;
+  };
+
+  focus: {
+    problemSwitchesPerHour: number | null;
+    videoSwitchesPerHour: number | null;
+    videoFocusPct: number | null;
+    breaksSuggestedThisWeek: number;
   };
 
   weekly: {

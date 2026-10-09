@@ -148,7 +148,7 @@ function barPath(
 const SERIES = [
   { key: "leetcodeMs", label: "LeetCode", color: "var(--series-1)" },
   { key: "youtubeMs", label: "YouTube", color: "var(--series-2)" },
-  { key: "otherMs", label: "Other", color: "var(--series-3)" }
+  { key: "otherMs", label: "Other sites", color: "var(--series-3)" }
 ] as const;
 
 
@@ -785,3 +785,60 @@ export function StatusBadge({
   );
 
 }
+
+
+// --------------------------------------------------
+// STUDY RHYTHM (time of day)
+// --------------------------------------------------
+
+export function RhythmBars({
+  periods,
+  sharpest
+}: {
+  periods: DashboardData["rhythm"]["periods"];
+  sharpest: string | null;
+}) {
+
+  const max =
+    Math.max(...periods.map(p => p.studyMs), 1);
+
+  return (
+    <div className="rhythm-list">
+
+      {periods.map(p => (
+        <div key={p.id} className="rhythm-row">
+
+          <span className="rhythm-name">
+            {p.label}
+            <small>{p.hours}</small>
+          </span>
+
+          <span
+            className="meter"
+            role="meter"
+            aria-valuemin={0}
+            aria-valuemax={Math.round(max / 60000)}
+            aria-valuenow={Math.round(p.studyMs / 60000)}
+            aria-label={`${p.label}: ${formatDuration(p.studyMs)} of study`}
+          >
+            <span className="meter-fill" style={{ width: `${(p.studyMs / max) * 100}%` }} />
+          </span>
+
+          <span className="rhythm-value">
+            {formatDuration(p.studyMs)}
+            <small>
+              {p.accuracy === null
+                ? "no submissions"
+                : `${p.accuracy}% accepted`}
+              {p.id === sharpest ? " · best" : ""}
+            </small>
+          </span>
+
+        </div>
+      ))}
+
+    </div>
+  );
+
+}
+

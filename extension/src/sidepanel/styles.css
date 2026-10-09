@@ -310,10 +310,50 @@ h2 {
   padding: 6px 14px;
 }
 
-/* The manual question box stays hidden; guidance is proactive. */
-.mentor-input,
+/* Ask the mentor a question of your own. */
+.mentor-input {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.mentor-input label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--forest-ink);
+}
+
+.mentor-input textarea {
+  min-height: 64px;
+  resize: vertical;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: #fffdf8;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.mentor-input textarea:focus {
+  outline: 2px solid var(--sage-300);
+  outline-offset: 0;
+  border-color: var(--sage-500);
+}
+
 .mentor-response {
-  display: none;
+  margin-top: 12px;
+}
+
+.mentor-response p {
+  white-space: pre-wrap;
+}
+
+.session-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 /* ---------------- sign-in screen ---------------- */

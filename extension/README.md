@@ -429,6 +429,22 @@ The mentor adapts to each learner from their stored history, not one script for 
 
 With no history, everything falls back to the general behaviour.
 
+### Supported sites, pausing, breaks and reminders
+
+**Sites.** Besides LeetCode and YouTube, the extension tracks study on GeeksforGeeks, HackerRank, Codeforces, W3Schools, MDN Web Docs, Khan Academy, Coursera, freeCodeCamp, the Python docs and cppreference (list in `src/core/sites.ts`, kept in step with `backend/src/sites.mjs`). On these it records time per page, the page's topics (from its title and headings) and whether it is reading, a practice problem or a course page. That time counts towards the same sessions, topics, dashboard and mentor. Submission verdicts are only read on LeetCode.
+
+**Pause / Resume.** The session card has a Pause button. A paused session counts nothing (no time, no video stats, no nudges) until Resume, whatever the browser does meanwhile; locking the computer also pauses.
+
+**Break suggestions.** After a long uninterrupted stretch (about the learner's usual session length, 45-90 minutes; 60 by default) the mentor suggests a 5-minute break, at most every 45 minutes. A gap of 5 minutes or a pause counts as a break.
+
+**Concept reminders.** When the learner opens a problem, video or page on a topic they struggle with (weak, or video questions mostly wrong), the mentor shows the topic's key idea first (`backend/src/dashboard/concepts.mjs`), at most once per topic per day; a topic seen for the very first time gets a one-off introduction.
+
+**Distraction on LeetCode.** Switching tabs or windows while on a problem is counted against the problem; repeated switching gets a focus reminder (the threshold adapts to the learner's habits).
+
+**Ask the mentor.** The side panel's question box works on every supported site: hints on LeetCode (with the current code), explanations on YouTube (using the transcript around the current moment) and on other sites (using selected text, or the page's main text).
+
+**When you study best.** The dashboard shows study time by time of day and the share of accepted submissions in each, with a recommendation when one time of day is clearly better; plus focus figures (switches per hour on problems and videos, how much of video time had attention, break reminders).
+
 ### Sign-in and Google setup
 
 The side panel asks you to sign in with email + password, or with Google. Passwords are stored as scrypt hashes; tokens are random, stored hashed, per device, and expire after 30 days. A Google account whose verified email matches an existing password account is linked to it.
@@ -468,6 +484,9 @@ All routes except `signup`, `login`, `google` and `health` need `Authorization: 
 | POST | `/api/youtube/progress` | Add a report of watching activity for a video; may return a recall prompt |
 | GET | `/api/youtube/watches/current` | Running totals for a video (`videoId`) in the current session |
 | GET | `/api/youtube/watches` | Recent video watch history |
+| POST | `/api/sessions/current/pause` | Pause the session (nothing counts until resumed) |
+| POST | `/api/sessions/current/resume` | Resume a paused session |
+| POST | `/api/sessions/current/distraction` | Record a tab/window switch away from a problem; may return a focus reminder |
 | GET | `/api/dashboard` | Everything the learning dashboard shows, including recommendations |
 | GET / POST | `/api/dashboard/coach` | Latest AI study plan / write a new one |
 | GET / PUT | `/api/me/preferences` | Time zone and daily study goal |

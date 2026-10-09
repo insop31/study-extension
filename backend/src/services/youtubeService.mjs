@@ -1,6 +1,7 @@
 import { withTx } from "../db.mjs";
 import { VIDEO_NUDGE_TYPES, decideVideoNudge } from "./videoMentor.mjs";
 import { focusNote, recallNote, videoThresholds } from "../dashboard/personalize.mjs";
+import { maybeConceptReminder } from "./notes.mjs";
 
 export function toWatch(row) {
   if (!row) return null;
@@ -53,14 +54,15 @@ export function createYouTubeService(pool, now = () => new Date(), profiles = nu
 
     return withTx(pool, async client => {
       const { rows: [session] } = await client.query(
-        `SELECT id, user_state FROM study_sessions
+        `SELECT id, user_state, paused_by_user FROM study_sessions
          WHERE user_id = $1 AND status = 'active'
          ORDER BY start_time DESC LIMIT 1
          FOR UPDATE`,
         [userId]
       );
 
-      if (!session) return { watch: null, nudge: null };
+      // Nothing is recorded while the learner has paused the session.
+      if (!session || session.paused_by_user) return { watch: null, nudge: null };
 
       const at = now();
       const { video, delta } = report;
@@ -95,7 +97,7 @@ export function createYouTubeService(pool, now = () => new Date(), profiles = nu
            max_position_s = GREATEST(video_watches.max_position_s, EXCLUDED.max_position_s),
            ended = video_watches.ended OR EXCLUDED.ended,
            last_seen = EXCLUDED.last_seen
-         RETURNING *`,
+         RETURNING *, (xmax = 0) AS inserted`,
         [
           userId, session.id, video.videoId, video.title, video.channel ?? null,
           video.category ?? null, video.topics, video.durationS, video.score,
@@ -158,6 +160,11 @@ export function createYouTubeService(pool, now = () => new Date(), profiles = nu
           priority: created.priority,
           createdAt: created.timestamp.getTime()
         };
+      }
+
+      // A new video on a topic the learner finds hard: remind them of the key idea.
+      if (!nudge && watch.inserted && profile) {
+        nudge = await maybeConceptReminder(client, { userId, sessionId: session.id, profile, at });
       }
 
       return { watch: toWatch(watch), nudge };

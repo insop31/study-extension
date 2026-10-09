@@ -10,6 +10,15 @@ const INSTRUCTIONS = [
   "Do not provide a full solution or replacement implementation."
 ].join(" ");
 
+// For questions about a video or a page: explain, don't just hint.
+const EXPLAIN_INSTRUCTIONS = [
+  "You are a patient study mentor helping a student understand learning material.",
+  "The input gives the title and topics of what they are studying (a video or a web page) and, when available, an excerpt of it.",
+  "Answer the student's question using the excerpt when it is relevant; explain in plain language with one short example.",
+  "Check understanding by ending with one short question they can answer themselves.",
+  "Keep it under 150 words. If the question is unrelated to the material, still help briefly."
+].join(" ");
+
 const REQUEST_TIMEOUT_MS = 40_000;
 
 export function extractText(data) {
@@ -107,10 +116,10 @@ export function createMentorClient({ apiKey, model, fetchImpl = fetch }) {
   const complete = createCompleter({ apiKey, model, fetchImpl });
 
   // style: extra instructions that adapt the hint to this learner.
-  return async function askMentor(learnerContext, { style = [] } = {}) {
+  return async function askMentor(learnerContext, { style = [], platform = "leetcode" } = {}) {
     const result = await complete({
       instructions: [
-        INSTRUCTIONS,
+        platform === "leetcode" ? INSTRUCTIONS : EXPLAIN_INSTRUCTIONS,
         "The input's `learner` field describes this student's history; use it to pitch the hint at the right level, but never recite their statistics back to them.",
         ...style
       ].join(" "),

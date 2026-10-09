@@ -1,5 +1,14 @@
 import { withTx } from "../db.mjs";
-import { leetCodePersonal } from "../dashboard/personalize.mjs";
+import { leetCodePersonal, videoThresholds } from "../dashboard/personalize.mjs";
+import {
+  BREAK_GAP_MS,
+  breakMessage,
+  problemFocusMessage,
+  shouldRemindProblemFocus,
+  shouldSuggestBreak
+} from "../dashboard/reminders.mjs";
+import { isReadingSite } from "../sites.mjs";
+import { createNote, lastNoteAt, maybeConceptReminder } from "./notes.mjs";
 
 // Gaps longer than this between two activities are not counted as study time.
 export const IDLE_THRESHOLD_MS = 60 * 1000;
@@ -10,7 +19,7 @@ const NOISY_ACTIVITY_TYPES = new Set(["heartbeat", "mousemove", "video_watch"]);
 
 const FINAL_VERDICT_EXCLUDED = new Set(["submitted"]);
 
-const ENGINE_NUDGE_TYPES = ["STUCK", "THINKING_PROMPT", "ACTIVE_RECALL", "BREAK_REMINDER"];
+const ENGINE_NUDGE_TYPES = ["STUCK", "THINKING_PROMPT", "ACTIVE_RECALL"];
 
 export function toSession(row) {
   if (!row) return null;
@@ -23,7 +32,8 @@ export function toSession(row) {
     currentPage: row.current_page,
     currentUrl: row.current_url,
     isActive: row.status === "active",
-    userState: row.user_state
+    userState: row.user_state,
+    pausedByUser: Boolean(row.paused_by_user)
   };
 }
 
@@ -60,12 +70,39 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
        DO UPDATE SET active_ms = study_time_daily.active_ms + EXCLUDED.active_ms`,
       [userId, at, platform, ms]
     );
+    // And the local hour, for "when you study best".
+    await client.query(
+      `INSERT INTO study_time_hourly (user_id, day, hour, active_ms)
+       SELECT $1, ($2::timestamptz AT TIME ZONE u.timezone)::date,
+              extract(hour FROM ($2::timestamptz AT TIME ZONE u.timezone))::int, $3
+       FROM users u WHERE u.id = $1
+       ON CONFLICT (user_id, day, hour)
+       DO UPDATE SET active_ms = study_time_hourly.active_ms + EXCLUDED.active_ms`,
+      [userId, at, ms]
+    );
+  }
+
+  // Time on a page of another educational site. Returns true for a new page.
+  async function updatePageRead(client, userId, input, at, creditedMs) {
+    const { rows: [row] } = await client.query(
+      `INSERT INTO page_reads (user_id, url, site, title, kind, topics, active_ms, first_seen, last_seen)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6::text[], '{}'), $7, $8, $8)
+       ON CONFLICT (user_id, url) DO UPDATE SET
+         title = EXCLUDED.title,
+         kind = EXCLUDED.kind,
+         topics = CASE WHEN cardinality(EXCLUDED.topics) > 0 THEN EXCLUDED.topics ELSE page_reads.topics END,
+         active_ms = page_reads.active_ms + EXCLUDED.active_ms,
+         last_seen = EXCLUDED.last_seen
+       RETURNING (xmax = 0) AS inserted`,
+      [userId, input.url, input.website, input.title, input.pageKind ?? "reading", input.topics ?? null, creditedMs, at]
+    );
+    return row.inserted;
   }
 
   // Time on the problem, attempts, and the first time it was solved.
   async function updateProblemProgress(client, userId, problemId, at, { creditedMs, verdict }) {
     const accepted = verdict === "accepted";
-    await client.query(
+    const { rows } = await client.query(
       `INSERT INTO problem_progress
          (user_id, problem_id, first_seen, last_seen, active_ms, attempts, accepted, solved_at, solve_ms)
        VALUES ($1, $2, $3::timestamptz, $3::timestamptz, $4::bigint, $5::int, $6::int,
@@ -81,9 +118,11 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
            problem_progress.solve_ms,
            CASE WHEN EXCLUDED.accepted > 0
                 THEN problem_progress.active_ms + EXCLUDED.active_ms END
-         )`,
+         )
+       RETURNING (xmax = 0) AS inserted`,
       [userId, problemId, at, creditedMs, verdict ? 1 : 0, accepted ? 1 : 0]
     );
+    return rows[0].inserted;
   }
 
   async function getCurrent(userId) {
@@ -103,8 +142,8 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
     const { rows } = await client.query(
       `INSERT INTO study_sessions
          (user_id, website, current_page, current_url, start_time,
-          last_activity_time, status, user_state)
-       VALUES ($1, $2, $3, $4, $5, $5, 'active', 'active')
+          last_activity_time, status, user_state, focus_since)
+       VALUES ($1, $2, $3, $4, $5, $5, 'active', 'active', $5)
        RETURNING *`,
       [userId, website, title, url, at]
     );
@@ -234,12 +273,16 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
       const row = await currentRow(client, userId, { lock: true });
       if (!row) return null;
 
-      if (row.status !== "active") {
-        return { session: toSession(row), nudgeState: null };
+      if (row.status !== "active" || row.paused_by_user) {
+        return { session: toSession(row), nudgeState: null, notice: null };
       }
 
       const at = now();
       const elapsed = at.getTime() - row.last_activity_time.getTime();
+
+      // A gap of a few minutes (idle, away, or between activities) is a break.
+      const focusSince =
+        !row.focus_since || elapsed >= BREAK_GAP_MS ? at : row.focus_since;
 
       // Only credit the gap if the learner was already active and the gap is
       // short, so time spent on other tabs is never added on return.
@@ -253,10 +296,10 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
          SET active_duration_ms = active_duration_ms + $2,
              last_activity_time = $3,
              website = $4, current_page = $5, current_url = $6,
-             user_state = 'active'
+             user_state = 'active', focus_since = $7
          WHERE id = $1
          RETURNING *`,
-        [row.id, credited, at, input.website, input.title, input.url]
+        [row.id, credited, at, input.website, input.title, input.url, focusSince]
       );
       const session = rows[0];
 
@@ -273,11 +316,23 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
           ? input.submissionResult
           : null;
 
+      let newPlace = row.current_url !== input.url;
+
       if (problemId) {
-        await updateProblemProgress(client, userId, problemId, at, {
+        const firstTime = await updateProblemProgress(client, userId, problemId, at, {
           creditedMs: row.website === "leetcode" ? credited : 0,
           verdict
         });
+        newPlace = newPlace || firstTime;
+      }
+
+      // Pages on other educational sites: time and topics per page.
+      if (isReadingSite(input.website)) {
+        const firstTime = await updatePageRead(
+          client, userId, input, at,
+          row.current_url === input.url ? credited : 0
+        );
+        newPlace = newPlace || firstTime;
       }
 
       if (!NOISY_ACTIVITY_TYPES.has(input.activityType)) {
@@ -316,11 +371,32 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
         );
       }
 
+      // A break after a long stretch, or a reminder of the key idea when
+      // starting on a topic the learner finds hard. At most one at a time.
+      let notice = null;
+      const focusMs = at.getTime() - new Date(session.focus_since).getTime();
+      const profile = profiles ? await profiles.get(userId, { topics: input.topics }) : null;
+
+      if (shouldSuggestBreak({
+        focusMs,
+        lastBreakAt: await lastNoteAt(client, userId, "BREAK_REMINDER"),
+        now: at,
+        profile
+      })) {
+        notice = await createNote(client, {
+          userId, sessionId: row.id, type: "BREAK_REMINDER",
+          message: breakMessage(focusMs), priority: "medium", at
+        });
+      } else if (newPlace && profile && input.topics?.length) {
+        notice = await maybeConceptReminder(client, { userId, sessionId: row.id, profile, at });
+      }
+
       return {
         session: toSession(session),
         nudgeState: await nudgeState(
           client, userId, row.id, input.website, input.problemSlug, input
-        )
+        ),
+        notice
       };
     });
 
@@ -335,7 +411,7 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
     return withTx(pool, async client => {
       const row = await currentRow(client, userId, { lock: true });
       if (!row) return null;
-      if (row.status !== "active") return toSession(row);
+      if (row.status !== "active" || row.paused_by_user) return toSession(row);
       if (row.user_state === state) return toSession(row);
 
       const at = now();
@@ -377,7 +453,7 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
       const { rows } = await client.query(
         `UPDATE study_sessions
          SET active_duration_ms = active_duration_ms + $2,
-             status = 'ended', user_state = 'paused',
+             status = 'ended', user_state = 'paused', paused_by_user = false,
              last_activity_time = $3, end_time = $3
          WHERE id = $1
          RETURNING *`,
@@ -386,6 +462,102 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
       await creditDay(client, userId, row.website, at, credited);
       await dismissOpenNudges(client, userId);
       return toSession(rows[0]);
+    });
+  }
+
+  // The learner pauses on purpose: nothing counts until they resume.
+  async function pause(userId) {
+    return withTx(pool, async client => {
+      const row = await currentRow(client, userId, { lock: true });
+      if (!row) return null;
+      if (row.status !== "active" || row.paused_by_user) return toSession(row);
+
+      const at = now();
+      const elapsed = at.getTime() - row.last_activity_time.getTime();
+      const credited =
+        row.user_state === "active" && elapsed > 0 && elapsed <= IDLE_THRESHOLD_MS
+          ? elapsed
+          : 0;
+
+      const { rows } = await client.query(
+        `UPDATE study_sessions
+         SET active_duration_ms = active_duration_ms + $2,
+             last_activity_time = $3, user_state = 'paused', paused_by_user = true
+         WHERE id = $1
+         RETURNING *`,
+        [row.id, credited, at]
+      );
+      await creditDay(client, userId, row.website, at, credited);
+      return toSession(rows[0]);
+    });
+  }
+
+  async function resume(userId) {
+    return withTx(pool, async client => {
+      const row = await currentRow(client, userId, { lock: true });
+      if (!row) return null;
+      if (row.status !== "active" || !row.paused_by_user) return toSession(row);
+
+      const at = now();
+      // The pause is a break: the next stretch starts now, and the time
+      // spent paused is never counted.
+      const { rows } = await client.query(
+        `UPDATE study_sessions
+         SET paused_by_user = false, user_state = 'active',
+             last_activity_time = $2, focus_since = $2
+         WHERE id = $1
+         RETURNING *`,
+        [row.id, at]
+      );
+      return toSession(rows[0]);
+    });
+  }
+
+  // The learner switched tab or window while on a problem. Counted against
+  // the problem; several switches earn a focus reminder.
+  async function recordDistraction(userId, { website, problemSlug, title }) {
+    if (website !== "leetcode" || !problemSlug) return { nudge: null };
+
+    const profile = profiles ? await profiles.get(userId, {}) : null;
+    const threshold = profile ? videoThresholds(profile).switchesForFocus : 3;
+
+    return withTx(pool, async client => {
+      const row = await currentRow(client, userId, { lock: true });
+      if (!row || row.status !== "active" || row.paused_by_user) return { nudge: null };
+
+      const at = now();
+      const { rows: [progress] } = await client.query(
+        `UPDATE problem_progress pp SET switches = switches + 1
+         FROM problems p
+         WHERE p.id = pp.problem_id AND pp.user_id = $1 AND p.platform = $2 AND p.slug = $3
+         RETURNING pp.problem_id, pp.switches, pp.switch_marker`,
+        [userId, website, problemSlug]
+      );
+      if (!progress) return { nudge: null };
+
+      const switches = progress.switches - progress.switch_marker;
+      if (!shouldRemindProblemFocus({
+        switches,
+        threshold,
+        lastFocusAt: await lastNoteAt(client, userId, "FOCUS_REMINDER"),
+        now: at
+      })) {
+        return { nudge: null };
+      }
+
+      await client.query(
+        `UPDATE problem_progress SET switch_marker = switches
+         WHERE user_id = $1 AND problem_id = $2`,
+        [userId, progress.problem_id]
+      );
+
+      const name = (title ?? problemSlug).replace(/ - LeetCode$/, "");
+      const nudge = await createNote(client, {
+        userId, sessionId: row.id, type: "FOCUS_REMINDER",
+        message: problemFocusMessage(switches, name), priority: "medium", at,
+        problemSlug
+      });
+      return { nudge };
     });
   }
 
@@ -398,5 +570,8 @@ export function createSessionService(pool, now = () => new Date(), profiles = nu
     return rows.map(toSession);
   }
 
-  return { getCurrent, start, updatePage, recordActivity, setState, end, list };
+  return {
+    getCurrent, start, updatePage, recordActivity, setState, end, list,
+    pause, resume, recordDistraction
+  };
 }

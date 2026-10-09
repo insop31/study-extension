@@ -1,5 +1,6 @@
 import {
   addDays,
+  buildRhythm,
   buildTopics,
   byDay,
   dayRange,
@@ -10,6 +11,7 @@ import {
   weekStart
 } from "../dashboard/metrics.mjs";
 import { buildRecommendations } from "../dashboard/recommendations.mjs";
+import { SITES } from "../sites.mjs";
 
 const DIFFICULTIES = ["Easy", "Medium", "Hard"];
 
@@ -63,7 +65,7 @@ export function createDashboardService(pool, { now = () => new Date(), complete 
     // last two 7-day periods and the last 8 weeks.
     const heatmapStart = addDays(weekStart(today), -77);
 
-    const [daily, sessions, problems, firstTry, videos, quizzes, mentor] = await Promise.all([
+    const [daily, sessions, problems, firstTry, videos, quizzes, mentor, readings, hours, attemptHours, focus] = await Promise.all([
       pool.query(
         `SELECT to_char(day, 'YYYY-MM-DD') AS day, platform, active_ms
          FROM study_time_daily WHERE user_id = $1 AND day >= $2::date`,
@@ -117,6 +119,39 @@ export function createDashboardService(pool, { now = () => new Date(), complete 
       pool.query(
         `SELECT count(*)::int AS n FROM mentor_interactions
          WHERE user_id = $1 AND "timestamp" >= $2::timestamptz - interval '7 days'`,
+        [userId, at]
+      ),
+      pool.query(
+        `SELECT url, site, title, kind, topics, active_ms, last_seen
+         FROM page_reads WHERE user_id = $1`,
+        [userId]
+      ),
+      // Study time by local hour over the last 4 weeks.
+      pool.query(
+        `SELECT hour, sum(active_ms)::bigint AS active_ms FROM study_time_hourly
+         WHERE user_id = $1 AND day >= $2::date
+         GROUP BY hour`,
+        [userId, addDays(today, -27)]
+      ),
+      // Graded submissions by local hour over the last 90 days.
+      pool.query(
+        `SELECT extract(hour FROM ("timestamp" AT TIME ZONE $2))::int AS hour,
+                (result = 'accepted') AS accepted
+         FROM problem_attempts
+         WHERE user_id = $1 AND "timestamp" >= $3::timestamptz - interval '90 days'`,
+        [userId, timezone, at]
+      ),
+      // How focused: switching away from problems and from videos.
+      pool.query(
+        `SELECT
+           (SELECT COALESCE(sum(switches), 0) FROM problem_progress WHERE user_id = $1)::int AS problem_switches,
+           (SELECT COALESCE(sum(active_ms), 0) FROM problem_progress WHERE user_id = $1)::bigint AS problem_ms,
+           (SELECT COALESCE(sum(tab_changes + window_changes), 0) FROM video_watches WHERE user_id = $1)::int AS video_switches,
+           (SELECT COALESCE(sum(playing_s), 0) FROM video_watches WHERE user_id = $1)::float AS video_playing_s,
+           (SELECT COALESCE(sum(active_s), 0) FROM video_watches WHERE user_id = $1)::float AS video_active_s,
+           (SELECT count(*) FROM mentor_interactions
+             WHERE user_id = $1 AND nudge_type = 'BREAK_REMINDER'
+               AND "timestamp" >= $2::timestamptz - interval '7 days')::int AS breaks_suggested`,
         [userId, at]
       )
     ]);
@@ -200,11 +235,39 @@ export function createDashboardService(pool, { now = () => new Date(), complete 
       }));
 
     // ---- topics ------------------------------------------------------------
+    const readingRows = readings.rows.map(r => ({ ...r, active_ms: Number(r.active_ms) }));
+
     const topics = buildTopics({
       problems: problemRows,
       videos: videoRows,
-      quizzes: quizRows
+      quizzes: quizRows,
+      readings: readingRows
     });
+
+    const recentReading = [...readingRows]
+      .sort((a, b) => b.last_seen - a.last_seen)
+      .slice(0, 6)
+      .map(r => ({
+        url: r.url,
+        title: r.title,
+        site: SITES[r.site]?.label ?? r.site,
+        kind: r.kind,
+        topics: r.topics,
+        timeMs: r.active_ms,
+        lastSeen: r.last_seen.getTime()
+      }));
+
+    const rhythm = buildRhythm({ hours: hours.rows, attempts: attemptHours.rows });
+
+    const f = focus.rows[0];
+    const problemHours = Number(f.problem_ms) / 3600000;
+    const videoHours = f.video_playing_s / 3600;
+    const focusStats = {
+      problemSwitchesPerHour: problemHours >= 0.25 ? Math.round(f.problem_switches / problemHours) : null,
+      videoSwitchesPerHour: videoHours >= 0.25 ? Math.round(f.video_switches / videoHours) : null,
+      videoFocusPct: f.video_playing_s >= 600 ? Math.round((f.video_active_s / f.video_playing_s) * 100) : null,
+      breaksSuggestedThisWeek: f.breaks_suggested
+    };
 
     const summary = {
       todayMs: total(today),
@@ -233,7 +296,9 @@ export function createDashboardService(pool, { now = () => new Date(), complete 
         ? Math.round((correctQuizzes.length / answeredQuizzes.length) * 100)
         : null,
       mentorNotesThisWeek: mentor.rows[0].n,
-      topicsStudied: topics.length
+      topicsStudied: topics.length,
+      pagesRead: readingRows.length,
+      readingMs: readingRows.reduce((acc, r) => acc + r.active_ms, 0)
     };
 
     return {
@@ -246,6 +311,9 @@ export function createDashboardService(pool, { now = () => new Date(), complete 
       heatmap,
       problems: { byDifficulty, recent: recentProblems },
       videos: { recent: recentVideos },
+      reading: { recent: recentReading },
+      rhythm,
+      focus: focusStats,
       topics,
       weakTopics: weakTopics(topics),
       strongTopics: topics.filter(t => t.status === "strong").slice(0, 5),
@@ -254,7 +322,9 @@ export function createDashboardService(pool, { now = () => new Date(), complete 
         topics,
         problems: problemRows,
         byDifficulty,
-        dailyGoalMinutes
+        dailyGoalMinutes,
+        rhythm,
+        focus: focusStats
       })
     };
   }

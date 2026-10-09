@@ -1,9 +1,8 @@
 // Shared types used by the content script, service worker and side panel.
 
-export type Platform =
-  | "leetcode"
-  | "youtube"
-  | "unknown";
+// A supported site id (see sites.ts: "leetcode", "youtube", "mdn", ...)
+// or "unknown".
+export type Platform = string;
 
 export type UserState =
   | "active"
@@ -31,6 +30,9 @@ export interface PageContext {
   // Set on YouTube watch pages once the video has been identified.
   video?: VideoInfo;
 
+  // On other educational sites: what kind of page this is.
+  pageKind?: "reading" | "problem" | "course" | "video";
+
 }
 
 export type NudgeType =
@@ -42,7 +44,8 @@ export type NudgeType =
   | "AI_MENTOR_ERROR"
   | "FOCUS_REMINDER"
   | "SKIP_REMINDER"
-  | "CONFUSION_CHECK";
+  | "CONFUSION_CHECK"
+  | "CONCEPT_REMINDER";
 
 export interface Nudge {
 

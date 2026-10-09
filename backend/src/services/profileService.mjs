@@ -10,7 +10,7 @@ export function createProfileService(pool, now = () => new Date()) {
   async function loadRaw(userId) {
     const at = now();
 
-    const [problems, languages, videos, quizzes, hints, sessions, days] = await Promise.all([
+    const [problems, languages, videos, quizzes, hints, sessions, days, readings] = await Promise.all([
       pool.query(
         `SELECT p.slug, p.title, p.difficulty, p.topics,
                 pp.attempts, pp.accepted, pp.active_ms, pp.solve_ms, pp.last_seen,
@@ -52,7 +52,7 @@ export function createProfileService(pool, now = () => new Date()) {
       pool.query(
         `SELECT COALESCE(avg(active_duration_ms), 0)::float AS avg_ms
          FROM study_sessions
-         WHERE user_id = $1 AND active_duration_ms >= 60000
+         WHERE user_id = $1 AND active_duration_ms >= 60000 AND status = 'ended'
            AND start_time >= $2::timestamptz - interval '14 days'`,
         [userId, at]
       ),
@@ -62,10 +62,15 @@ export function createProfileService(pool, now = () => new Date()) {
            AND day >= (($2::timestamptz AT TIME ZONE
                          (SELECT timezone FROM users WHERE id = $1))::date - 13)`,
         [userId, at]
+      ),
+      pool.query(
+        "SELECT topics, active_ms FROM page_reads WHERE user_id = $1",
+        [userId]
       )
     ]);
 
     return {
+      readings: readings.rows,
       problems: problems.rows,
       languages: languages.rows,
       videos: videos.rows,

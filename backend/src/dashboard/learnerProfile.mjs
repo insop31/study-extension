@@ -45,7 +45,8 @@ export function buildLearnerProfile(raw, focus = {}) {
   const topics = buildTopics({
     problems,
     videos: raw.videos,
-    quizzes: raw.quizzes
+    quizzes: raw.quizzes,
+    readings: raw.readings ?? []
   });
 
   const attempted = problems.filter(p => p.attempts > 0);
@@ -107,6 +108,8 @@ export function buildLearnerProfile(raw, focus = {}) {
       problemsSolved: stats?.problemsSolved ?? 0,
       problemsAttempted: stats?.problemsAttempted ?? 0,
       quizAccuracy: stats?.quizAccuracy ?? null,
+      quizAnswered: stats?.quizAnswered ?? 0,
+      studyMs: stats?.studyMs ?? 0,
       solvedExamples: related.filter(p => p.solved).slice(0, 3).map(p => p.title),
       unsolvedExamples: related.filter(p => !p.solved && p.attempts > 0).slice(0, 2).map(p => p.title)
     };

@@ -14,6 +14,11 @@ import type {
 import AuthScreen from "./AuthScreen";
 
 import {
+  isReadingSite,
+  siteLabel
+} from "../core/sites";
+
+import {
   BunnyAvatar,
   ForestScene,
   PineMark,
@@ -432,6 +437,24 @@ function Dashboard({
   }
 
 
+  function handlePauseResume(): void {
+
+    chrome.runtime.sendMessage(
+      {
+        type: session?.pausedByUser
+          ? "RESUME_SESSION"
+          : "PAUSE_SESSION"
+      },
+      () => {
+
+        loadData();
+
+      }
+    );
+
+  }
+
+
   function handleAskMentor(): void {
 
     setMentorLoading(true);
@@ -559,6 +582,13 @@ function formatTime(
     }
 
 
+    if (session.pausedByUser) {
+
+      return "Paused";
+
+    }
+
+
     if (
       session.userState ===
       "paused"
@@ -607,12 +637,19 @@ function formatTime(
     }
 
 
+    if (session.pausedByUser) {
+
+      return "Nothing is being counted. Resume when you're ready.";
+
+    }
+
+
     if (
       session.userState ===
       "paused"
     ) {
 
-      return "The study page is currently paused.";
+      return "The computer is locked, so the session is paused.";
 
     }
 
@@ -757,11 +794,7 @@ function formatTime(
                   `chip ${context.website === "leetcode" ? "cool" : context.website === "youtube" ? "warm" : ""}`
                 }
               >
-                {context.website === "leetcode"
-                  ? "LeetCode"
-                  : context.website === "youtube"
-                    ? "YouTube"
-                    : context.website}
+                {siteLabel(context.website)}
               </span>
 
             </div>
@@ -792,6 +825,46 @@ function formatTime(
 
                   <span>
                     {context.programmingLanguage ?? "Detecting..."}
+                  </span>
+
+                </div>
+
+              </>
+
+            )}
+
+
+            {isReadingSite(context.website) && (
+
+              <>
+
+                <div className="activity">
+
+                  <span className="label">
+                    Page type
+                  </span>
+
+                  <span>
+                    {context.pageKind === "problem"
+                      ? "Practice problem"
+                      : context.pageKind === "course"
+                        ? "Course"
+                        : "Reading"}
+                  </span>
+
+                </div>
+
+
+                <div className="activity">
+
+                  <span className="label">
+                    Topics
+                  </span>
+
+                  <span>
+                    {context.topics?.length
+                      ? context.topics.join(", ")
+                      : "Detecting..."}
                   </span>
 
                 </div>
@@ -973,7 +1046,9 @@ function formatTime(
         ) : (
 
           <p className="muted">
-            Open LeetCode or YouTube to begin studying.
+            Open LeetCode, an educational YouTube video, or a supported
+            learning site (GeeksforGeeks, MDN, W3Schools, Khan Academy...)
+            to begin studying.
           </p>
 
         )}
@@ -1030,16 +1105,29 @@ function formatTime(
 
         {session?.isActive ? (
 
-          <button
-            className="btn btn-ghost session-button"
-            onClick={
-              handleEndSession
-            }
-          >
+          <div className="session-actions">
 
-            End Session
+            <button
+              className={session.pausedByUser ? "btn btn-primary" : "btn btn-sage"}
+              onClick={handlePauseResume}
+            >
 
-          </button>
+              {session.pausedByUser ? "Resume" : "Pause"}
+
+            </button>
+
+            <button
+              className="btn btn-ghost"
+              onClick={
+                handleEndSession
+              }
+            >
+
+              End Session
+
+            </button>
+
+          </div>
 
         ) : (
 
@@ -1141,7 +1229,9 @@ function formatTime(
         <div className="mentor-input">
 
           <label htmlFor="mentor-question">
-            Ask about your next step
+            {context?.website === "leetcode"
+              ? "Ask about your next step"
+              : "Ask the mentor about what you're studying"}
           </label>
 
 
@@ -1155,14 +1245,21 @@ function formatTime(
               );
 
             }}
-            placeholder="I'm stuck—what should I check next?"
+            placeholder={
+              context?.website === "leetcode"
+                ? "I'm stuck. What should I check next?"
+                : context?.website === "youtube"
+                  ? "What did the video just mean by...?"
+                  : "Select text on the page, then ask about it"
+            }
             maxLength={1000}
           />
 
 
           <button
+            className="btn btn-primary"
             onClick={handleAskMentor}
-            disabled={mentorLoading}
+            disabled={mentorLoading || !mentorQuestion.trim()}
           >
 
             {mentorLoading

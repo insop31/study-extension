@@ -18,10 +18,12 @@ import { mentorStyle, profileForModel } from "./dashboard/personalize.mjs";
 import { createDashboardService } from "./services/dashboardService.mjs";
 import { createQuizService } from "./services/quizService.mjs";
 import { createYouTubeService } from "./services/youtubeService.mjs";
+import { SITE_IDS } from "./sites.mjs";
 
 const text = max => z.string().max(max);
 
-const websiteSchema = z.enum(["leetcode", "youtube"]);
+// Every educational site the extension tracks (see sites.mjs).
+const websiteSchema = z.enum(SITE_IDS);
 
 const pageSchema = z.object({
   website: websiteSchema,
@@ -35,7 +37,16 @@ const activitySchema = pageSchema.extend({
   difficulty: text(20).optional(),
   topics: z.array(text(100)).max(30).optional(),
   programmingLanguage: text(50).optional(),
-  submissionResult: text(50).optional()
+  submissionResult: text(50).optional(),
+  // On other educational sites: what kind of page this is.
+  pageKind: z.enum(["reading", "problem", "course", "video"]).optional()
+});
+
+const distractionSchema = z.object({
+  kind: z.enum(["tab", "window"]),
+  website: websiteSchema,
+  problemSlug: text(200).optional(),
+  title: text(500).optional()
 });
 
 const emailSchema = z.string().trim().toLowerCase().email().max(254);
@@ -60,7 +71,7 @@ const nudgeSchema = z.object({
   type: z.enum([
     "STUCK", "THINKING_PROMPT", "ACTIVE_RECALL", "BREAK_REMINDER",
     "AI_MENTOR", "AI_MENTOR_ERROR",
-    "FOCUS_REMINDER", "SKIP_REMINDER", "CONFUSION_CHECK"
+    "FOCUS_REMINDER", "SKIP_REMINDER", "CONFUSION_CHECK", "CONCEPT_REMINDER"
   ]),
   message: text(4000),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
@@ -120,6 +131,14 @@ const preferencesSchema = z.object({
 });
 
 const mentorSchema = z.object({
+  // Where the learner is: a LeetCode problem (default), a YouTube video, or
+  // a page on another educational site.
+  platform: z.enum(["leetcode", "youtube", "web"]).default("leetcode"),
+  site: text(50).optional(),
+  title: text(500).optional(),
+  // Transcript lines (video) or page text the question is about.
+  excerpt: text(8000).optional(),
+  positionS: z.number().min(0).max(172800).optional(),
   problem: text(500).optional(),
   slug: text(200).optional(),
   difficulty: text(20).optional(),
@@ -309,6 +328,21 @@ export function createApp({ pool, askMentor, generateQuiz = null, completeText =
     res.json({ session: await sessions.end(req.userId) });
   });
 
+  app.post("/api/sessions/current/pause", auth, async (req, res) => {
+    res.json({ session: await sessions.pause(req.userId) });
+  });
+
+  app.post("/api/sessions/current/resume", auth, async (req, res) => {
+    res.json({ session: await sessions.resume(req.userId) });
+  });
+
+  // The learner left the page they were studying (another tab or window).
+  app.post("/api/sessions/current/distraction", auth, async (req, res) => {
+    const body = parse(distractionSchema, req.body, res);
+    if (!body) return;
+    res.json(await sessions.recordDistraction(req.userId, body));
+  });
+
   app.post("/api/sessions/current/activity", auth, async (req, res) => {
     const body = parse(activitySchema, req.body, res);
     if (!body) return;
@@ -477,7 +511,7 @@ export function createApp({ pool, askMentor, generateQuiz = null, completeText =
       const session = await sessions.getCurrent(req.userId);
 
       // Recent signals come from the database, not from the client.
-      const { rows } = await pool.query(
+      const { rows } = body.platform !== "leetcode" ? { rows: [] } : await pool.query(
         `SELECT * FROM (
            SELECT activity_type, "timestamp", programming_language, submission_result
            FROM activities
@@ -509,8 +543,10 @@ export function createApp({ pool, askMentor, generateQuiz = null, completeText =
           })),
           studentQuestion:
             body.studentQuestion?.trim() ||
-            "Give me the single most useful next step."
-        }, { style: mentorStyle(profile) }));
+            (body.platform === "leetcode"
+              ? "Give me the single most useful next step."
+              : "Explain the main idea of this part in simple terms.")
+        }, { style: mentorStyle(profile), platform: body.platform }));
       } catch (error) {
         console.error("Mentor error:", error);
         res.status(502).json({ success: false, error: "The mentor could not respond right now." });

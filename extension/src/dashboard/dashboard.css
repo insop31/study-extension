@@ -814,3 +814,83 @@ h2 {
 .heatmap-svg .axis-label {
   font-size: 8px;
 }
+
+
+/* ---------------- study rhythm and focus ---------------- */
+
+.rhythm-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.rhythm-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 120px;
+  align-items: center;
+  gap: 10px;
+}
+
+.rhythm-name,
+.rhythm-value {
+  display: grid;
+  font-size: 12.5px;
+}
+
+.rhythm-name {
+  font-weight: 600;
+}
+
+.rhythm-name small,
+.rhythm-value small {
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.rhythm-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rhythm-row .meter-fill {
+  background: var(--series-1);
+}
+
+.insight {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--sage-50);
+  border: 1px solid var(--sage-200);
+  font-size: 12.5px;
+}
+
+.focus-list {
+  display: grid;
+  gap: 0;
+  margin: 4px 0 0;
+}
+
+.focus-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.focus-list div:last-child {
+  border-bottom: none;
+}
+
+.focus-list dt {
+  color: var(--ink-2);
+}
+
+.focus-list dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+

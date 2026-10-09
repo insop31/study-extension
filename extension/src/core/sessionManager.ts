@@ -37,6 +37,9 @@ export interface ActivityDetails {
 
   submissionResult?: string;
 
+  // On other educational sites: what kind of page this is.
+  pageKind?: string;
+
 }
 
 
@@ -63,6 +66,9 @@ export interface ActivityResult {
   session: StudySession;
 
   nudgeState: NudgeState | null;
+
+  // A break suggestion or concept reminder the backend just created.
+  notice?: Nudge | null;
 
 }
 
@@ -115,6 +121,7 @@ export async function recordActivity(
     await api<{
       session: StudySession | null;
       nudgeState: NudgeState | null;
+      notice?: Nudge | null;
     }>(
       "POST",
       "/sessions/current/activity",
@@ -146,6 +153,57 @@ export async function setUserState(
     );
 
   return session;
+
+}
+
+
+// A deliberate pause: nothing counts until resumeSession().
+export async function pauseSession():
+  Promise<StudySession | null> {
+
+  const { session } =
+    await api<SessionResponse>(
+      "POST",
+      "/sessions/current/pause"
+    );
+
+  return session;
+
+}
+
+
+export async function resumeSession():
+  Promise<StudySession | null> {
+
+  const { session } =
+    await api<SessionResponse>(
+      "POST",
+      "/sessions/current/resume"
+    );
+
+  return session;
+
+}
+
+
+// The learner left a problem page for another tab or window.
+export async function recordDistraction(
+  details: {
+    kind: "tab" | "window";
+    website: string;
+    problemSlug?: string;
+    title?: string;
+  }
+): Promise<Nudge | null> {
+
+  const { nudge } =
+    await api<{ nudge: Nudge | null }>(
+      "POST",
+      "/sessions/current/distraction",
+      details
+    );
+
+  return nudge;
 
 }
 

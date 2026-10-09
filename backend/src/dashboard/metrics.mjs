@@ -172,8 +172,9 @@ const ratio = (part, whole) => (whole > 0 ? part / whole : null);
  * problems: [{ topics: string[], attempts, accepted, solved: boolean, active_ms, solve_ms }]
  * videos:   [{ topics: string[], watch_time_s }]
  * quizzes:  [{ topics: string[], answered: boolean, correct: boolean }]
+ * readings: [{ topics: string[], active_ms }]   pages on other educational sites
  */
-export function buildTopics({ problems, videos, quizzes }) {
+export function buildTopics({ problems, videos, quizzes, readings = [] }) {
   const topics = new Map();
   const get = name => {
     const topic = canonicalTopic(name);
@@ -189,6 +190,7 @@ export function buildTopics({ problems, videos, quizzes }) {
         solveMsTotal: 0,
         solveCount: 0,
         videoWatchMs: 0,
+        readingMs: 0,
         quizAnswered: 0,
         quizCorrect: 0,
         sources: new Set()
@@ -221,6 +223,14 @@ export function buildTopics({ problems, videos, quizzes }) {
       const t = get(name);
       t.sources.add("youtube");
       t.videoWatchMs += Math.round(Number(v.watch_time_s) * 1000);
+    }
+  }
+
+  for (const r of readings) {
+    for (const name of unique(r.topics)) {
+      const t = get(name);
+      t.sources.add("web");
+      t.readingMs += Number(r.active_ms);
     }
   }
 
@@ -266,7 +276,8 @@ export function buildTopics({ problems, videos, quizzes }) {
         avgSolveMs: t.solveCount > 0 ? Math.round(t.solveMsTotal / t.solveCount) : null,
         problemMs: t.problemMs,
         videoWatchMs: t.videoWatchMs,
-        studyMs: t.problemMs + t.videoWatchMs,
+        readingMs: t.readingMs,
+        studyMs: t.problemMs + t.videoWatchMs + t.readingMs,
         quizAnswered: t.quizAnswered,
         quizCorrect: t.quizCorrect,
         quizAccuracy: parts.quizAccuracy === null ? null : Math.round(parts.quizAccuracy * 100),
@@ -284,3 +295,81 @@ export function weakTopics(topics, limit = 5) {
     .sort((a, b) => a.mastery - b.mastery || b.evidence - a.evidence)
     .slice(0, limit);
 }
+
+
+// ---- study rhythm ("when you study best") --------------------------------
+
+export const PERIODS = [
+  { id: "morning", label: "Morning", hours: "5am-12pm", from: 5, to: 12 },
+  { id: "afternoon", label: "Afternoon", hours: "12-5pm", from: 12, to: 17 },
+  { id: "evening", label: "Evening", hours: "5-9pm", from: 17, to: 21 },
+  { id: "night", label: "Night", hours: "9pm-5am", from: 21, to: 29 }
+];
+
+export function periodOf(hour) {
+  const h = hour < 5 ? hour + 24 : hour;
+  return PERIODS.find(p => h >= p.from && h < p.to).id;
+}
+
+// A period needs this many graded submissions before its accuracy is compared.
+export const MIN_PERIOD_ATTEMPTS = 5;
+
+/**
+ * hours:    [{ hour: 0-23, active_ms }]       local hours, recent weeks
+ * attempts: [{ hour: 0-23, accepted: bool }]  graded submissions, local hours
+ */
+export function buildRhythm({ hours, attempts }) {
+  const periods = PERIODS.map(p => ({
+    id: p.id,
+    label: p.label,
+    hours: p.hours,
+    studyMs: 0,
+    attempts: 0,
+    accepted: 0,
+    accuracy: null
+  }));
+  const byId = Object.fromEntries(periods.map(p => [p.id, p]));
+
+  for (const row of hours) byId[periodOf(Number(row.hour))].studyMs += Number(row.active_ms);
+  for (const row of attempts) {
+    const p = byId[periodOf(Number(row.hour))];
+    p.attempts += 1;
+    p.accepted += row.accepted ? 1 : 0;
+  }
+  for (const p of periods) {
+    p.accuracy = p.attempts > 0 ? Math.round((p.accepted / p.attempts) * 100) : null;
+  }
+
+  const totalMs = periods.reduce((acc, p) => acc + p.studyMs, 0);
+  const mostStudied = totalMs > 0 ? [...periods].sort((a, b) => b.studyMs - a.studyMs)[0] : null;
+
+  const graded = periods.filter(p => p.attempts >= MIN_PERIOD_ATTEMPTS);
+  const totalAttempts = periods.reduce((acc, p) => acc + p.attempts, 0);
+  const overall = totalAttempts > 0
+    ? Math.round((periods.reduce((acc, p) => acc + p.accepted, 0) / totalAttempts) * 100)
+    : null;
+  const sharpest = graded.length >= 2
+    ? [...graded].sort((a, b) => b.accuracy - a.accuracy)[0]
+    : null;
+
+  let insight = null;
+  if (sharpest && overall !== null && sharpest.accuracy - overall >= 10) {
+    insight =
+      `Your submissions are most accurate in the ${sharpest.label.toLowerCase()} ` +
+      `(${sharpest.accuracy}% accepted vs ${overall}% overall)` +
+      (mostStudied && mostStudied.id !== sharpest.id
+        ? `, but you study most in the ${mostStudied.label.toLowerCase()}.`
+        : ".");
+  } else if (mostStudied && mostStudied.studyMs >= 30 * 60000) {
+    insight = `You study most in the ${mostStudied.label.toLowerCase()} (${mostStudied.hours}).`;
+  }
+
+  return {
+    periods,
+    mostStudied: mostStudied?.id ?? null,
+    sharpest: sharpest?.id ?? null,
+    overallAccuracy: overall,
+    insight
+  };
+}
+

@@ -11,6 +11,7 @@ import {
 
 import {
   DifficultyBars,
+  RhythmBars,
   Heatmap,
   MasteryBar,
   StatusBadge,
@@ -52,6 +53,7 @@ const NAV = [
   { id: "week", label: "This week", icon: Icons.Week },
   { id: "topics", label: "Topics", icon: Icons.Topics },
   { id: "activity", label: "Activity", icon: Icons.Activity },
+  { id: "rhythm", label: "Study rhythm", icon: Icons.Timer },
   { id: "recent", label: "Recent", icon: Icons.Recent },
   { id: "plan", label: "Study plan", icon: Icons.Plan }
 ] as const;
@@ -190,7 +192,7 @@ function TopicsTable({
                   <td>
                     <span className="topic-name">{t.topic}</span>
                     <span className="topic-sources">
-                      {t.sources.map(source => source === "leetcode" ? "LeetCode" : "YouTube").join(" · ")}
+                      {t.sources.map(source => source === "leetcode" ? "LeetCode" : source === "youtube" ? "YouTube" : "Other sites").join(" · ")}
                     </span>
                   </td>
                   <td><StatusBadge status={t.status} /></td>
@@ -667,7 +669,11 @@ export default function DashboardPage() {
         <StatTile
           label="Videos watched"
           value={String(s.videosWatched)}
-          detail={`${formatDuration(s.videoWatchMs)} of learning videos`}
+          detail={
+            s.pagesRead > 0
+              ? `${formatDuration(s.videoWatchMs)} of video · ${formatDuration(s.readingMs)} reading ${s.pagesRead} ${s.pagesRead === 1 ? "page" : "pages"}`
+              : `${formatDuration(s.videoWatchMs)} of learning videos`
+          }
         />
 
       </section>
@@ -792,7 +798,75 @@ export default function DashboardPage() {
       {/* RECENT WORK */}
       {/* ------------------------------------------ */}
 
-      <div className="grid two" id="recent">
+      {/* ------------------------------------------ */}
+      {/* STUDY RHYTHM AND FOCUS */}
+      {/* ------------------------------------------ */}
+
+      <div className="grid two" id="rhythm">
+
+        <section className="card">
+
+          <h2>When you study best</h2>
+          <p className="card-subtitle">
+            Study time by time of day (last 4 weeks) and how often submissions were accepted (last 90 days).
+          </p>
+
+          <RhythmBars
+            periods={data.rhythm.periods}
+            sharpest={data.rhythm.sharpest}
+          />
+
+          <p className="insight">
+            {data.rhythm.insight ??
+              "Study at a few different times of day and this will show when you work best."}
+          </p>
+
+        </section>
+
+
+        <section className="card">
+
+          <h2>Focus</h2>
+          <p className="card-subtitle">How often you leave what you're studying.</p>
+
+          <dl className="focus-list">
+
+            <div>
+              <dt>Switches away from a problem</dt>
+              <dd>
+                {data.focus.problemSwitchesPerHour === null
+                  ? "Not enough problem time yet"
+                  : `${data.focus.problemSwitchesPerHour} per hour`}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Switches away from a video</dt>
+              <dd>
+                {data.focus.videoSwitchesPerHour === null
+                  ? "Not enough video time yet"
+                  : `${data.focus.videoSwitchesPerHour} per hour`}
+              </dd>
+            </div>
+
+            <div>
+              <dt>Time a video had your attention</dt>
+              <dd>{formatPercent(data.focus.videoFocusPct)}</dd>
+            </div>
+
+            <div>
+              <dt>Break reminders this week</dt>
+              <dd>{data.focus.breaksSuggestedThisWeek}</dd>
+            </div>
+
+          </dl>
+
+        </section>
+
+      </div>
+
+
+      <div className={data.reading.recent.length > 0 ? "grid three" : "grid two"} id="recent">
 
         <section className="card">
 
@@ -872,6 +946,30 @@ export default function DashboardPage() {
           )}
 
         </section>
+
+
+        {data.reading.recent.length > 0 && (
+
+          <section className="card">
+
+            <h2>Recent reading</h2>
+
+            <ul className="video-list">
+              {data.reading.recent.map(r => (
+                <li key={r.url}>
+                  <a href={r.url} target="_blank" rel="noreferrer">
+                    {r.title}
+                  </a>
+                  <span className="topic-sources">
+                    {[r.site, r.topics.join(", "), formatDuration(r.timeMs), timeAgo(r.lastSeen)].filter(Boolean).join(" · ")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+          </section>
+
+        )}
 
       </div>
 

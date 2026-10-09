@@ -27,6 +27,9 @@ export interface StudySession {
 
   userState: UserState;
 
+  // Paused with the Pause button (stays paused until resumed).
+  pausedByUser?: boolean;
+
 }
 
 
